@@ -16,8 +16,9 @@ import (
 // here and may be changed at any time (e.g. from a slider in the UI).
 var DefaultBackground = microui.RGBA(40, 44, 52, 255)
 
-// Terminal is the default microui Driver: it renders the command list to a
-// truecolor ANSI terminal, treating each character cell as one "pixel", drawing
+// Terminal is the default microui Driver: it renders the command list to an
+// ANSI terminal (truecolor when advertised via COLORTERM, 256-color otherwise),
+// treating each character cell as one "pixel", drawing
 // text in the terminal font, and reading input from SGR mouse reporting plus
 // the keyboard. It uses only the standard library (raw mode is set via stty),
 // so there is no cgo and no third-party dependency.
@@ -34,6 +35,7 @@ type Terminal struct {
 	clip microui.Rect
 
 	interactive bool
+	truecolor   bool   // emit 24-bit color; otherwise quantize to the 256-color palette
 	savedState  string // `stty -g` output, restored on Close
 	in          chan []byte
 	pending     []byte
@@ -51,7 +53,7 @@ func NewTerminal() (*Terminal, error) {
 	if !isInteractive() {
 		return NewHeadless(80, 24), nil
 	}
-	t := &Terminal{interactive: true, BG: DefaultBackground}
+	t := &Terminal{interactive: true, truecolor: supportsTruecolor(), BG: DefaultBackground}
 	if err := t.enterRaw(); err != nil {
 		return nil, err
 	}
@@ -127,11 +129,11 @@ func (t *Terminal) DrawIcon(id int, rect microui.Rect, color microui.Color) {
 	drawIcon(t.scr, id, rect, t.clip, color)
 }
 
-// Present flushes the frame: a truecolor ANSI string in interactive mode, or a
-// plain-text dump otherwise.
+// Present flushes the frame: an ANSI string in interactive mode (truecolor
+// when the terminal supports it, 256-color otherwise), or a plain-text dump.
 func (t *Terminal) Present() {
 	if t.interactive {
-		os.Stdout.WriteString(renderANSI(t.scr))
+		os.Stdout.WriteString(renderANSI(t.scr, t.truecolor))
 	} else {
 		os.Stdout.WriteString(plainText(t.scr))
 	}
@@ -330,9 +332,61 @@ func drawIcon(s *screen, id int, rect, clip microui.Rect, color microui.Color) {
 	}
 }
 
-// renderANSI serializes the screen to a truecolor ANSI string, positioning the
+// supportsTruecolor reports whether the terminal advertises 24-bit color via
+// COLORTERM (the de-facto convention set by iTerm2, Ghostty, Kitty, WezTerm,
+// VS Code, ...). Terminals that don't set it — notably Apple's Terminal.app —
+// get the 256-color fallback; exporting COLORTERM=truecolor forces 24-bit.
+func supportsTruecolor() bool {
+	ct := strings.ToLower(os.Getenv("COLORTERM"))
+	return strings.Contains(ct, "truecolor") || strings.Contains(ct, "24bit")
+}
+
+// ansi256 returns the xterm-256 palette index nearest to c, choosing between
+// the 6x6x6 color cube (16-231) and the grayscale ramp (232-255).
+func ansi256(c microui.Color) int {
+	// Nearest cube channel: levels are 0, 95, 135, 175, 215, 255.
+	cubeIdx := func(v uint8) int {
+		if v < 48 {
+			return 0
+		}
+		if v < 115 {
+			return 1
+		}
+		return (int(v) - 35) / 40
+	}
+	cubeVal := func(i int) int {
+		if i == 0 {
+			return 0
+		}
+		return 55 + 40*i
+	}
+	qr, qg, qb := cubeIdx(c.R), cubeIdx(c.G), cubeIdx(c.B)
+	cr, cg, cb := cubeVal(qr), cubeVal(qg), cubeVal(qb)
+
+	// Nearest gray ramp entry: levels are 8, 18, ..., 238.
+	avg := (int(c.R) + int(c.G) + int(c.B)) / 3
+	gi := (avg - 3) / 10
+	if gi < 0 {
+		gi = 0
+	} else if gi > 23 {
+		gi = 23
+	}
+	gv := 8 + 10*gi
+
+	distSq := func(r, g, b int) int {
+		dr, dg, db := r-int(c.R), g-int(c.G), b-int(c.B)
+		return dr*dr + dg*dg + db*db
+	}
+	if distSq(gv, gv, gv) < distSq(cr, cg, cb) {
+		return 232 + gi
+	}
+	return 16 + 36*qr + 6*qg + qb
+}
+
+// renderANSI serializes the screen to an ANSI string — 24-bit color when
+// truecolor is set, nearest xterm-256 colors otherwise — positioning the
 // cursor explicitly at the start of each row to avoid auto-wrap artifacts.
-func renderANSI(s *screen) string {
+func renderANSI(s *screen, truecolor bool) string {
 	var b strings.Builder
 	var fg, bg microui.Color
 	haveColor := false
@@ -341,8 +395,12 @@ func renderANSI(s *screen) string {
 		for x := 0; x < s.w; x++ {
 			c := s.at(x, y)
 			if !haveColor || c.fg != fg || c.bg != bg {
-				fmt.Fprintf(&b, "\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm",
-					c.fg.R, c.fg.G, c.fg.B, c.bg.R, c.bg.G, c.bg.B)
+				if truecolor {
+					fmt.Fprintf(&b, "\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm",
+						c.fg.R, c.fg.G, c.fg.B, c.bg.R, c.bg.G, c.bg.B)
+				} else {
+					fmt.Fprintf(&b, "\x1b[38;5;%dm\x1b[48;5;%dm", ansi256(c.fg), ansi256(c.bg))
+				}
 				fg, bg, haveColor = c.fg, c.bg, true
 			}
 			ch := c.ch

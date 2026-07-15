@@ -77,12 +77,43 @@ func TestRenderANSINonEmpty(t *testing.T) {
 	c.End()
 	paint(term, c, miniui.RGBA(0, 0, 0, 255))
 
-	out := renderANSI(term.scr)
+	out := renderANSI(term.scr, true)
 	if !strings.Contains(out, "\x1b[48;2;") {
 		t.Errorf("ANSI output missing truecolor background sequences")
 	}
 	if !strings.HasSuffix(out, "\x1b[0m") {
 		t.Errorf("ANSI output should end with a reset")
+	}
+
+	out = renderANSI(term.scr, false)
+	if !strings.Contains(out, "\x1b[48;5;") {
+		t.Errorf("256-color output missing indexed background sequences")
+	}
+	if strings.Contains(out, "38;2;") || strings.Contains(out, "48;2;") {
+		t.Errorf("256-color output should not contain truecolor sequences")
+	}
+	if !strings.HasSuffix(out, "\x1b[0m") {
+		t.Errorf("256-color output should end with a reset")
+	}
+}
+
+func TestAnsi256(t *testing.T) {
+	cases := []struct {
+		c    miniui.Color
+		want int
+	}{
+		{miniui.RGBA(0, 0, 0, 255), 16},        // cube black
+		{miniui.RGBA(255, 255, 255, 255), 231}, // cube white
+		{miniui.RGBA(255, 0, 0, 255), 196},     // pure red
+		{miniui.RGBA(0, 255, 0, 255), 46},      // pure green
+		{miniui.RGBA(0, 0, 255, 255), 21},      // pure blue
+		{miniui.RGBA(8, 8, 8, 255), 232},       // darkest gray ramp entry
+		{miniui.RGBA(128, 128, 128, 255), 244}, // mid gray -> ramp, not cube
+	}
+	for _, tc := range cases {
+		if got := ansi256(tc.c); got != tc.want {
+			t.Errorf("ansi256(%d,%d,%d) = %d, want %d", tc.c.R, tc.c.G, tc.c.B, got, tc.want)
+		}
 	}
 }
 
