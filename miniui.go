@@ -101,6 +101,7 @@ const (
 	ColorBaseFocus
 	ColorScrollBase
 	ColorScrollThumb
+	ColorSelection
 	ColorMax
 )
 
@@ -138,6 +139,9 @@ const (
 	OptPopup
 	OptClosed
 	OptExpanded
+	// OptPassword makes a textbox display PasswordMask in place of every rune
+	// while still editing the real value.
+	OptPassword
 )
 
 // has reports whether opt contains flag.
@@ -150,14 +154,28 @@ const (
 	MouseMiddle
 )
 
-// Key bits passed to InputKeyDown / InputKeyUp.
+// Key bits passed to InputKeyDown / InputKeyUp. Editing keys (arrows, Home,
+// End, Delete, select-all) drive the textbox cursor and selection; backends
+// that do not report them simply get end-of-line editing.
 const (
 	KeyShift = 1 << iota
 	KeyCtrl
 	KeyAlt
 	KeyBackspace
 	KeyReturn
+	KeyLeft
+	KeyRight
+	KeyHome
+	KeyEnd
+	KeyDelete
+	// KeySelectAll selects a focused textbox's whole value. It is its own bit
+	// (rather than Ctrl+A) so backends can map whatever chord is native.
+	KeySelectAll
 )
+
+// PasswordMask is the rune drawn per input rune by textboxes with
+// OptPassword. It defaults to '*' so even ASCII-only backends render it.
+var PasswordMask = '*'
 
 // Style holds the colors and metrics used to lay out and draw controls.
 type Style struct {
@@ -210,6 +228,7 @@ func DefaultStyle() Style {
 			ColorBaseFocus:   {40, 40, 40, 255},
 			ColorScrollBase:  {43, 43, 43, 255},
 			ColorScrollThumb: {30, 30, 30, 255},
+			ColorSelection:   {60, 90, 130, 255},
 		},
 	}
 }

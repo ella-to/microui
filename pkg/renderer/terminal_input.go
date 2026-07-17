@@ -29,6 +29,11 @@ func parseInput(ctx *miniui.Context, buf []byte, quit *bool) int {
 			*quit = true
 			i++
 
+		case c == 0x01: // Ctrl-A: select all in a focused textbox
+			ctx.InputKeyDown(miniui.KeySelectAll)
+			ctx.InputKeyUp(miniui.KeySelectAll)
+			i++
+
 		case c == '\r' || c == '\n': // Enter
 			ctx.InputKeyDown(miniui.KeyReturn)
 			ctx.InputKeyUp(miniui.KeyReturn)
@@ -85,7 +90,67 @@ func parseEscape(ctx *miniui.Context, buf []byte) (int, bool) {
 	if k >= len(buf) {
 		return 0, false
 	}
-	return k + 1, true // arrows etc.: ignored
+	parseCSIKey(ctx, string(buf[2:k]), buf[k])
+	return k + 1, true
+}
+
+// parseCSIKey translates a non-mouse CSI sequence (parameter bytes + final
+// byte) into key events: arrows, Home/End and Delete, honoring xterm-style
+// modifier parameters ("1;2"=Shift, "1;5"=Ctrl, "1;6"=both). Terminals report
+// no key releases, so modifiers are synthesized down around the key and up
+// again; the textbox reads them from keyPressed as well as keyDown.
+func parseCSIKey(ctx *miniui.Context, params string, final byte) {
+	key := 0
+	switch final {
+	case 'C':
+		key = miniui.KeyRight
+	case 'D':
+		key = miniui.KeyLeft
+	case 'H':
+		key = miniui.KeyHome
+	case 'F':
+		key = miniui.KeyEnd
+	case '~': // legacy "CSI n ~" keys
+		num := params
+		if i := strings.IndexByte(num, ';'); i >= 0 {
+			num = num[:i]
+		}
+		switch num {
+		case "1", "7":
+			key = miniui.KeyHome
+		case "3":
+			key = miniui.KeyDelete
+		case "4", "8":
+			key = miniui.KeyEnd
+		}
+	}
+	if key == 0 {
+		return // unhandled sequence (function keys, arrows up/down, ...)
+	}
+
+	mods := 0
+	if i := strings.IndexByte(params, ';'); i >= 0 {
+		if m, err := strconv.Atoi(params[i+1:]); err == nil {
+			m-- // xterm encodes the modifier bitmask plus one
+			if m&1 != 0 {
+				mods |= miniui.KeyShift
+			}
+			if m&2 != 0 {
+				mods |= miniui.KeyAlt
+			}
+			if m&4 != 0 {
+				mods |= miniui.KeyCtrl
+			}
+		}
+	}
+	if mods != 0 {
+		ctx.InputKeyDown(mods)
+	}
+	ctx.InputKeyDown(key)
+	ctx.InputKeyUp(key)
+	if mods != 0 {
+		ctx.InputKeyUp(mods)
+	}
 }
 
 // parseMouse decodes an SGR mouse report ("cb;cx;cy") and feeds it to ctx.

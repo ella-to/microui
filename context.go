@@ -3,6 +3,7 @@ package microui
 import (
 	"encoding/binary"
 	"sort"
+	"time"
 	"unsafe"
 )
 
@@ -20,6 +21,22 @@ type Container struct {
 	// head/tail are command-list indices delimiting this container's commands
 	// when it acts as a root container during a frame; -1 means "not a root".
 	head, tail int
+}
+
+// textEdit is the editing state (caret, selection, horizontal scroll) of the
+// focused textbox. Only one textbox can be focused at a time, so the context
+// retains a single instance; id records which control owns it, and the state
+// is discarded when that control loses focus.
+type textEdit struct {
+	id     ID
+	cursor int  // rune index of the insertion point
+	anchor int  // other end of the selection; == cursor when none
+	scroll int  // text units scrolled off the left edge
+	drag   bool // a mouse selection drag is in progress
+
+	// double-click tracking, in wall-clock time (see now).
+	lastClick  time.Time
+	lastClickX int
 }
 
 // poolItem is a slot in a retained-state pool, keyed by id and aged by the
@@ -59,6 +76,7 @@ type Context struct {
 
 	numberEditBuf string
 	numberEdit    ID
+	textEdit      textEdit
 
 	// stacks (grow as needed)
 	commandList    []Command

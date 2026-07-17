@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
+	"unicode"
 	"unicode/utf8"
 	"unsafe"
 )
@@ -224,47 +226,248 @@ func (c *Context) Checkbox(label string, state *bool) int {
 	return res
 }
 
+// now is the textbox's clock, indirect so tests can control double-click
+// timing.
+var now = time.Now
+
+// Double-click detection: two left presses within doubleClickWindow landing
+// at most doubleClickSlop text units apart select the word under the caret.
+const (
+	doubleClickWindow = 400 * time.Millisecond
+	doubleClickSlop   = 5
+)
+
+func (e *textEdit) hasSel() bool { return e.cursor != e.anchor }
+func (e *textEdit) selMin() int  { return min(e.cursor, e.anchor) }
+func (e *textEdit) selMax() int  { return max(e.cursor, e.anchor) }
+
+func (e *textEdit) clampTo(n int) {
+	e.cursor = clampI(e.cursor, 0, n)
+	e.anchor = clampI(e.anchor, 0, n)
+}
+
+// replaceSel replaces the selected range (or splices at the caret when
+// nothing is selected) with ins, leaving the caret after the insertion.
+func (e *textEdit) replaceSel(runes, ins []rune) []rune {
+	lo, hi := e.selMin(), e.selMax()
+	out := make([]rune, 0, len(runes)-(hi-lo)+len(ins))
+	out = append(out, runes[:lo]...)
+	out = append(out, ins...)
+	out = append(out, runes[hi:]...)
+	e.cursor = lo + len(ins)
+	e.anchor = e.cursor
+	return out
+}
+
+// textDisplay returns what a textbox draws: the value itself, or one
+// PasswordMask rune per rune when OptPassword is set. Editing indices are
+// interchangeable between the two because the mapping is rune-for-rune.
+func textDisplay(s string, opt Option) string {
+	if !opt.has(OptPassword) {
+		return s
+	}
+	return strings.Repeat(string(PasswordMask), utf8.RuneCountInString(s))
+}
+
+// textIndexAt returns the rune index in disp whose caret position is nearest
+// to x, given the text's left edge textx.
+func (c *Context) textIndexAt(disp []rune, font Font, textx, x int) int {
+	best, bestDist := 0, int(^uint(0)>>1)
+	for i := 0; i <= len(disp); i++ {
+		d := textx + c.TextWidth(font, string(disp[:i])) - x
+		if d < 0 {
+			d = -d
+		}
+		if d < bestDist {
+			best, bestDist = i, d
+		}
+	}
+	return best
+}
+
+// wordBoundsAt returns the boundaries of the word containing index i: a run
+// of non-space runes, or the run of spaces i falls in.
+func wordBoundsAt(disp []rune, i int) (lo, hi int) {
+	if len(disp) == 0 {
+		return 0, 0
+	}
+	if i >= len(disp) {
+		i = len(disp) - 1
+	}
+	space := unicode.IsSpace(disp[i])
+	lo, hi = i, i+1
+	for lo > 0 && unicode.IsSpace(disp[lo-1]) == space {
+		lo--
+	}
+	for hi < len(disp) && unicode.IsSpace(disp[hi]) == space {
+		hi++
+	}
+	return lo, hi
+}
+
 // TextboxRaw is the low-level text box: it edits buf for the control id at rect.
 // Unlike microui there is no fixed buffer size; the string grows as typed.
+//
+// While focused it supports full caret editing: arrows (with Shift extending
+// the selection and Ctrl jumping to the ends), Home/End, Delete/Backspace,
+// KeySelectAll, click to place the caret, drag to select, and double-click to
+// select a word. Long values scroll horizontally to keep the caret visible.
+// Backends that only report the classic key bits keep the old append/erase
+// behavior, since the caret then simply stays at the end.
 func (c *Context) TextboxRaw(buf *string, id ID, r Rect, opt Option) int {
 	res := 0
 	c.UpdateControl(id, r, opt|OptHoldFocus)
 
+	font := c.Style.Font
+	ed := &c.textEdit
+
 	if c.focus == id {
+		runes := []rune(*buf)
+		if ed.id != id {
+			// gaining focus: caret at the end, nothing selected
+			*ed = textEdit{id: id, cursor: len(runes), anchor: len(runes)}
+		}
+		ed.clampTo(len(runes))
+
+		disp := []rune(textDisplay(*buf, opt))
+		textx := r.X + c.Style.Padding - ed.scroll
+
+		// mouse: click to place the caret, drag to select, double-click for
+		// the word under the caret
+		if c.mousePressed&MouseLeft != 0 && c.hover == id {
+			i := c.textIndexAt(disp, font, textx, c.mousePos.X)
+			t := now()
+			dx := c.mousePos.X - ed.lastClickX
+			if dx < 0 {
+				dx = -dx
+			}
+			if t.Sub(ed.lastClick) < doubleClickWindow && dx <= doubleClickSlop {
+				ed.anchor, ed.cursor = wordBoundsAt(disp, i)
+			} else {
+				ed.cursor, ed.anchor = i, i
+				ed.drag = true
+			}
+			ed.lastClick, ed.lastClickX = t, c.mousePos.X
+		}
+		if ed.drag {
+			if c.mouseDown&MouseLeft != 0 {
+				ed.cursor = c.textIndexAt(disp, font, textx, c.mousePos.X)
+			} else {
+				ed.drag = false
+			}
+		}
+
+		// keyboard: modifiers may arrive either held (keyDown) or synthesized
+		// around a key event (keyPressed), e.g. by the terminal backend
+		mods := c.keyDown | c.keyPressed
+		shift := mods&KeyShift != 0
+		ctrl := mods&KeyCtrl != 0
+		k := c.keyPressed
+
+		// moveTo places the caret, extending the selection while Shift is
+		// held and collapsing it otherwise.
+		moveTo := func(i int) {
+			ed.cursor = clampI(i, 0, len(runes))
+			if !shift {
+				ed.anchor = ed.cursor
+			}
+		}
+		switch {
+		case k&KeyLeft != 0:
+			switch {
+			case ctrl:
+				moveTo(0)
+			case ed.hasSel() && !shift:
+				ed.cursor = ed.selMin()
+				ed.anchor = ed.cursor
+			default:
+				moveTo(ed.cursor - 1)
+			}
+		case k&KeyRight != 0:
+			switch {
+			case ctrl:
+				moveTo(len(runes))
+			case ed.hasSel() && !shift:
+				ed.cursor = ed.selMax()
+				ed.anchor = ed.cursor
+			default:
+				moveTo(ed.cursor + 1)
+			}
+		case k&KeyHome != 0:
+			moveTo(0)
+		case k&KeyEnd != 0:
+			moveTo(len(runes))
+		}
+		if k&KeySelectAll != 0 {
+			ed.anchor, ed.cursor = 0, len(runes)
+		}
+
 		// handle text input
 		if c.inputText != "" {
-			*buf += c.inputText
+			runes = ed.replaceSel(runes, []rune(c.inputText))
 			res |= ResChange
 		}
-		// handle backspace (remove the last rune)
-		if c.keyPressed&KeyBackspace != 0 && len(*buf) > 0 {
-			_, size := utf8.DecodeLastRuneInString(*buf)
-			*buf = (*buf)[:len(*buf)-size]
-			res |= ResChange
+		// handle backspace / delete (the selection if any, one rune otherwise)
+		if k&KeyBackspace != 0 {
+			if !ed.hasSel() && ed.cursor > 0 {
+				ed.anchor = ed.cursor - 1
+			}
+			if ed.hasSel() {
+				runes = ed.replaceSel(runes, nil)
+				res |= ResChange
+			}
+		}
+		if k&KeyDelete != 0 {
+			if !ed.hasSel() && ed.cursor < len(runes) {
+				ed.anchor = ed.cursor + 1
+			}
+			if ed.hasSel() {
+				runes = ed.replaceSel(runes, nil)
+				res |= ResChange
+			}
 		}
 		// handle return
-		if c.keyPressed&KeyReturn != 0 {
+		if k&KeyReturn != 0 {
 			c.SetFocus(0)
 			res |= ResSubmit
 		}
+		*buf = string(runes)
+	} else if ed.id == id {
+		ed.id = 0 // lost focus: forget the editing state
 	}
 
 	// draw
 	c.DrawControlFrame(id, r, ColorBase, opt)
+	display := textDisplay(*buf, opt)
 	if c.focus == id {
+		dispRunes := []rune(display)
 		color := c.Style.Colors[ColorText]
-		font := c.Style.Font
-		textw := c.TextWidth(font, *buf)
 		texth := c.TextHeight(font)
-		ofx := r.W - c.Style.Padding - textw - 1
-		textx := r.X + min(ofx, c.Style.Padding)
 		texty := r.Y + (r.H-texth)/2
+		pad := c.Style.Padding
+
+		// scroll to keep the caret inside the visible span
+		cw := c.TextWidth(font, string(dispRunes[:ed.cursor]))
+		inner := max(r.W-pad*2-1, 1)
+		if cw-ed.scroll > inner {
+			ed.scroll = cw - inner
+		}
+		if cw-ed.scroll < 0 {
+			ed.scroll = cw
+		}
+		textx := r.X + pad - ed.scroll
+
 		c.PushClipRect(r)
-		c.DrawText(font, *buf, Vec2{X: textx, Y: texty}, color)
-		c.DrawRect(Rect{X: textx + textw, Y: texty, W: 1, H: texth}, color)
+		if ed.hasSel() {
+			x0 := textx + c.TextWidth(font, string(dispRunes[:ed.selMin()]))
+			x1 := textx + c.TextWidth(font, string(dispRunes[:ed.selMax()]))
+			c.DrawRect(Rect{X: x0, Y: texty, W: x1 - x0, H: texth}, c.Style.Colors[ColorSelection])
+		}
+		c.DrawText(font, display, Vec2{X: textx, Y: texty}, color)
+		c.DrawRect(Rect{X: textx + cw, Y: texty, W: 1, H: texth}, color)
 		c.PopClipRect()
 	} else {
-		c.DrawControlText(*buf, r, ColorText, opt)
+		c.DrawControlText(display, r, ColorText, opt)
 	}
 
 	return res
@@ -273,6 +476,12 @@ func (c *Context) TextboxRaw(buf *string, id ID, r Rect, opt Option) int {
 // Textbox draws an editable single-line text box bound to buf.
 func (c *Context) Textbox(buf *string) int {
 	return c.TextboxEx(buf, 0)
+}
+
+// TextboxPassword draws a textbox that shows PasswordMask in place of each
+// rune while editing buf normally.
+func (c *Context) TextboxPassword(buf *string) int {
+	return c.TextboxEx(buf, OptPassword)
 }
 
 // TextboxEx draws an editable text box with options.

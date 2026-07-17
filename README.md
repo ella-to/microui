@@ -176,6 +176,23 @@ if res&miniui.ResChange != 0 { /* text changed */ }
 if res&miniui.ResSubmit != 0 { /* user pressed Enter */ }
 ```
 
+A focused textbox supports full caret editing when the backend reports the
+editing keys: arrows move the caret (Shift extends the selection, Ctrl jumps
+to the ends), Home/End and Delete work, `KeySelectAll` selects everything,
+clicking places the caret, dragging selects, and double-clicking selects a
+word. Long values scroll horizontally to keep the caret visible. The terminal
+backend reports all of these (select-all is Ctrl-A).
+
+For password entry, mask the value while editing it normally:
+
+```go
+res := ctx.TextboxPassword(&secret)      // shows one '*' per rune
+// equivalent: ctx.TextboxEx(&secret, miniui.OptPassword)
+```
+
+The mask rune is `miniui.PasswordMask` (default `'*'`); the real value never
+reaches the draw commands.
+
 ### Header (collapsible section)
 
 ```go
@@ -488,8 +505,8 @@ ctx.InputMouseDown(x, y, miniui.MouseLeft)  // or MouseRight / MouseMiddle
 ctx.InputMouseUp(x, y, miniui.MouseLeft)
 ctx.InputScroll(0, -3)                       // wheel; +y scrolls content down
 ctx.InputText("a")                           // a typed character / string
-ctx.InputKeyDown(miniui.KeyBackspace)        // KeyShift/Ctrl/Alt/Backspace/Return
-ctx.InputKeyUp(miniui.KeyBackspace)
+ctx.InputKeyDown(miniui.KeyBackspace)        // KeyShift/Ctrl/Alt/Backspace/Return,
+ctx.InputKeyUp(miniui.KeyBackspace)          // KeyLeft/Right/Home/End/Delete/SelectAll
 ```
 
 For discrete key taps (Backspace, Enter), call `InputKeyDown` immediately
