@@ -218,7 +218,9 @@ ctx.LayoutRow([]int{10, 10, 10}, 3)
 Units are whatever your renderer measures in: **pixels** for a canvas,
 **character cells** for the terminal. In the terminal the default control is
 3 rows tall (1 text row + 1 padding above and below). A row height of 1 gives
-compact single-line rows.
+compact single-line rows. Headers and tree nodes are always 1 row
+(`Style.HeaderHeight`); give the rows inside a tree height 1 too for a dense
+list, as `examples/filebrowser` does.
 
 ### Columns
 
@@ -670,7 +672,9 @@ if ctx.Focus() == id && ctx.MouseDown()&microui.MouseLeft != 0 {
 
 `ctx.Style` points at a `microui.Style`: metrics (`Size`, `Padding`,
 `Spacing`, `Indent`, `TitleHeight`, `ScrollbarSize`, `ThumbSize`, `MinWidth`,
-`MinHeight`, `ResizeHandle`) and colors indexed by `ColorID`.
+`MinHeight`, `ResizeHandle`, `HeaderHeight`) and colors indexed by `ColorID`.
+`HeaderHeight` sets the row height of headers and tree nodes. `0` means the
+default control height; the terminal style uses `1` so trees stay compact.
 
 ```go
 renderer.Run(term, ui, renderer.WithSetup(func(ctx *microui.Context) {
