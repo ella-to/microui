@@ -683,7 +683,7 @@ func (c *Context) NumberEx[T Number](value *T, step T, format string, opt Option
 func (c *Context) header(label string, istreenode bool, opt Option) Result {
 	id := c.getIDString(label)
 	idx := poolGet(c.treenodePool[:], id)
-	c.layoutRow(1, []int{-1}, 0)
+	c.layoutRow(1, []int{-1}, max(c.Style.HeaderHeight, 0))
 
 	active := idx >= 0
 	expanded := active
@@ -691,6 +691,8 @@ func (c *Context) header(label string, istreenode bool, opt Option) Result {
 		expanded = !active
 	}
 	r := c.LayoutNext()
+	// rows after the header keep microui's default control height
+	c.getLayout().size.Y = 0
 	c.UpdateControl(id, r, 0)
 
 	// handle click
@@ -721,9 +723,12 @@ func (c *Context) header(label string, istreenode bool, opt Option) Result {
 	if expanded {
 		icon = IconExpanded
 	}
-	c.DrawIcon(icon, Rect{X: r.X, Y: r.Y, W: r.H, H: r.H}, c.Style.Colors[ColorText])
-	r.X += r.H - c.Style.Padding
-	r.W -= r.H - c.Style.Padding
+	// The icon sits in a square cell as wide as a default control is tall, so
+	// a compact (HeaderHeight) row keeps the same horizontal spacing.
+	iconW := max(r.H, c.Style.Size.Y+c.Style.Padding*2)
+	c.DrawIcon(icon, Rect{X: r.X, Y: r.Y, W: iconW, H: r.H}, c.Style.Colors[ColorText])
+	r.X += iconW - c.Style.Padding
+	r.W -= iconW - c.Style.Padding
 	c.DrawControlText(label, r, ColorText, 0)
 
 	if expanded {

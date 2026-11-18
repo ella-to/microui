@@ -490,5 +490,8 @@ func TerminalStyle() microui.Style {
 	// The title bar is 1 cell tall, so a title-height resize handle would be a
 	// single corner cell — nearly impossible to grab. Use a larger grab zone.
 	st.ResizeHandle = 3
+	// Headers and tree nodes take a single row instead of the 3-row default
+	// control height, so trees and sectioned windows stay compact.
+	st.HeaderHeight = 1
 	return st
 }

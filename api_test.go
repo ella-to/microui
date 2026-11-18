@@ -232,3 +232,47 @@ func TestClosePopupFromInsideThePopup(t *testing.T) {
 		t.Fatal("ClosePopup called inside the popup did not close it")
 	}
 }
+
+func TestHeaderHeight(t *testing.T) {
+	for _, hh := range []int{0, 1} {
+		c := newBenchCtx() // cell metrics: default control height 3
+		c.Style.HeaderHeight = hh
+		var header, child, after Rect
+		var iconX, labelX int
+		runFrame(c, func() {
+			if c.BeginWindowEx("w", Rect{W: 40, H: 40}, OptNoTitle|OptNoScroll).Active() {
+				if c.BeginTreenodeEx("Node", OptExpanded).Active() {
+					header = c.LastRect
+					c.Label("child")
+					child = c.LastRect
+					c.EndTreenode()
+				}
+				c.Button("next")
+				after = c.LastRect
+				c.EndWindow()
+			}
+		})
+		for cmd := range c.Commands() {
+			switch {
+			case cmd.Type == CommandIcon:
+				iconX = cmd.Rect.X + cmd.Rect.W/2
+			case cmd.Type == CommandText && cmd.Str == "Node":
+				labelX = cmd.Pos.X
+			}
+		}
+		wantH := 3
+		if hh > 0 {
+			wantH = hh
+		}
+		if header.H != wantH {
+			t.Errorf("HeaderHeight=%d: header height %d, want %d", hh, header.H, wantH)
+		}
+		if child.H != 3 || after.H != 3 {
+			t.Errorf("HeaderHeight=%d: controls after a header must keep the default height, got %d and %d", hh, child.H, after.H)
+		}
+		if iconX-header.X != 1 || labelX-header.X != 3 {
+			t.Errorf("HeaderHeight=%d: icon at +%d, label at +%d; want +1 and +3 as with the default height",
+				hh, iconX-header.X, labelX-header.X)
+		}
+	}
+}

@@ -299,6 +299,11 @@ type Style struct {
 	// is <= 0 that behaviour is kept. Set it explicitly when the title height
 	// is too small to grab comfortably (e.g. a 1-cell title bar in a terminal).
 	ResizeHandle int
+	// HeaderHeight is the row height of headers and tree nodes. When it is
+	// <= 0 they use the default control height (Size.Y + 2*Padding), like
+	// microui. A terminal sets it to 1 so trees stay compact. Controls
+	// following a header still default to the normal control height.
+	HeaderHeight int
 	Colors       [ColorMax]Color
 }
 
