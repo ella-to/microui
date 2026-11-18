@@ -19,7 +19,7 @@ import (
 
 // demo state, persistent across frames.
 var (
-	bg         = [3]microui.Real{40, 44, 52}
+	bg         = [3]int{40, 44, 52} // the generic Slider binds ints directly
 	logbuf     string
 	logUpdated bool
 	textbuf    string
@@ -45,7 +45,7 @@ func main() {
 	err = renderer.Run(term, func(ctx *microui.Context) {
 		testWindow(ctx)
 		logWindow(ctx)
-		term.BG = microui.RGBA(int(bg[0]), int(bg[1]), int(bg[2]), 255)
+		term.BG = microui.RGBA(bg[0], bg[1], bg[2], 255)
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "demo:", err)
@@ -54,14 +54,14 @@ func main() {
 }
 
 func testWindow(ctx *microui.Context) {
-	if ctx.BeginWindow("Demo", microui.Rect{X: 1, Y: 1, W: 40, H: 22}) == 0 {
+	if !ctx.BeginWindow("Demo", microui.Rect{X: 1, Y: 1, W: 40, H: 22}).Active() {
 		return
 	}
 	win := ctx.GetCurrentContainer()
 	win.Rect.W = max(win.Rect.W, 24)
 	win.Rect.H = max(win.Rect.H, 8)
 
-	if ctx.Header("Window Info") != 0 {
+	if ctx.Header("Window Info").Active() {
 		ctx.LayoutRow([]int{10, -1}, 0)
 		ctx.Label("Position:")
 		ctx.Label(fmt.Sprintf("%d, %d", win.Rect.X, win.Rect.Y))
@@ -69,30 +69,30 @@ func testWindow(ctx *microui.Context) {
 		ctx.Label(fmt.Sprintf("%d, %d", win.Rect.W, win.Rect.H))
 	}
 
-	if ctx.HeaderEx("Buttons", microui.OptExpanded) != 0 {
+	if ctx.HeaderEx("Buttons", microui.OptExpanded).Active() {
 		ctx.LayoutRow([]int{12, 12}, 0)
-		if ctx.Button("Button 1") != 0 {
+		if ctx.Button("Button 1").Submitted() {
 			writeLog("Pressed Button 1")
 		}
-		if ctx.Button("Button 2") != 0 {
+		if ctx.Button("Button 2").Submitted() {
 			writeLog("Pressed Button 2")
 		}
-		if ctx.Button("Popup") != 0 {
+		if ctx.Button("Popup").Submitted() {
 			ctx.OpenPopup("Popup!")
 		}
-		if ctx.BeginPopup("Popup!") != 0 {
-			if ctx.Button("Hello") != 0 {
+		if ctx.BeginPopup("Popup!").Active() {
+			if ctx.Button("Hello").Submitted() {
 				writeLog("Hello")
 			}
-			if ctx.Button("World") != 0 {
+			if ctx.Button("World").Submitted() {
 				writeLog("World")
 			}
 			ctx.EndPopup()
 		}
 	}
 
-	if ctx.HeaderEx("Tree", microui.OptExpanded) != 0 {
-		if ctx.BeginTreenode("Options") != 0 {
+	if ctx.HeaderEx("Tree", microui.OptExpanded).Active() {
+		if ctx.BeginTreenode("Options").Active() {
 			ctx.Checkbox("Check 1", &checks[0])
 			ctx.Checkbox("Check 2", &checks[1])
 			ctx.Checkbox("Check 3", &checks[2])
@@ -100,21 +100,21 @@ func testWindow(ctx *microui.Context) {
 		}
 	}
 
-	if ctx.HeaderEx("Background", microui.OptExpanded) != 0 {
+	if ctx.HeaderEx("Background", microui.OptExpanded).Active() {
 		ctx.LayoutRow([]int{7, -1}, 0)
 		ctx.Label("Red:")
-		ctx.SliderEx(&bg[0], 0, 255, 0, "%.0f", microui.OptAlignCenter)
+		ctx.Slider(&bg[0], 0, 255)
 		ctx.Label("Green:")
-		ctx.SliderEx(&bg[1], 0, 255, 0, "%.0f", microui.OptAlignCenter)
+		ctx.Slider(&bg[1], 0, 255)
 		ctx.Label("Blue:")
-		ctx.SliderEx(&bg[2], 0, 255, 0, "%.0f", microui.OptAlignCenter)
+		ctx.Slider(&bg[2], 0, 255)
 	}
 
 	ctx.EndWindow()
 }
 
 func logWindow(ctx *microui.Context) {
-	if ctx.BeginWindow("Log", microui.Rect{X: 42, Y: 1, W: 36, H: 22}) == 0 {
+	if !ctx.BeginWindow("Log", microui.Rect{X: 42, Y: 1, W: 36, H: 22}).Active() {
 		return
 	}
 
@@ -133,11 +133,11 @@ func logWindow(ctx *microui.Context) {
 	// input textbox + submit button
 	submitted := false
 	ctx.LayoutRow([]int{-9, -1}, 0)
-	if ctx.Textbox(&textbuf)&microui.ResSubmit != 0 {
+	if ctx.Textbox(&textbuf).Submitted() {
 		ctx.SetFocus(ctx.LastID())
 		submitted = true
 	}
-	if ctx.Button("Submit") != 0 {
+	if ctx.Button("Submit").Submitted() {
 		submitted = true
 	}
 	if submitted && textbuf != "" {

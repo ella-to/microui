@@ -21,32 +21,32 @@ const popupName = "edit-name"
 var name = "world"
 
 func ui(ctx *microui.Context) {
-	if ctx.BeginWindow("Modal Demo", microui.Rect{X: 2, Y: 1, W: 46, H: 9}) == 0 {
+	if !ctx.BeginWindow("Modal Demo", microui.Rect{X: 2, Y: 1, W: 46, H: 9}).Active() {
 		return
 	}
 	defer ctx.EndWindow()
 
 	ctx.LayoutRow([]int{-1}, 0)
 	ctx.Label("Name: " + name)
-	if ctx.Button("Edit name…") != 0 {
+	if ctx.Button("Edit name…").Submitted() {
 		ctx.OpenPopup(popupName) // opens at the mouse on click
 	}
 
 	// The popup auto-closes when you click outside it; Enter or Done close it
-	// explicitly by marking its container closed for the next frame.
-	if ctx.BeginPopup(popupName) != 0 {
-		close := false
+	// explicitly with ClosePopup, which takes effect from the next frame.
+	if ctx.BeginPopup(popupName).Active() {
+		done := false
 		ctx.LayoutRow([]int{6, 18}, 0)
 		ctx.Label("Name:")
-		if ctx.Textbox(&name)&microui.ResSubmit != 0 {
-			close = true
+		if ctx.Textbox(&name).Submitted() {
+			done = true
 		}
 		ctx.LayoutRow([]int{24}, 0)
-		if ctx.Button("Done") != 0 {
-			close = true
+		if ctx.Button("Done").Submitted() {
+			done = true
 		}
-		if close {
-			ctx.GetContainer(popupName).Open = false
+		if done {
+			ctx.ClosePopup(popupName)
 		}
 		ctx.EndPopup()
 	}

@@ -49,7 +49,7 @@ func approach(cur, target float64) float64 {
 
 func ui(ctx *microui.Context) {
 	const canvas = microui.OptNoTitle | microui.OptNoResize | microui.OptNoScroll | microui.OptNoFrame
-	if ctx.BeginWindowEx("canvas", microui.Rect{X: 0, Y: 0, W: 1000, H: 1000}, canvas) == 0 {
+	if !ctx.BeginWindowEx("canvas", microui.Rect{X: 0, Y: 0, W: 1000, H: 1000}, canvas).Active() {
 		return
 	}
 	defer ctx.EndWindow()

@@ -549,8 +549,6 @@ func seatLong(seat int) string {
 
 // ---- drawing helpers --------------------------------------------------------
 
-func runeLen(s string) int { return len([]rune(s)) }
-
 // drawTextc draws s with its top-left at (x,y) in color col.
 func drawTextc(ctx *microui.Context, x, y int, s string, col microui.Color) {
 	ctx.DrawText(nil, s, microui.Vec2{X: x, Y: y}, col)
@@ -558,7 +556,7 @@ func drawTextc(ctx *microui.Context, x, y int, s string, col microui.Color) {
 
 // drawCenteredIn draws s centered within rect r in color col.
 func drawCenteredIn(ctx *microui.Context, r microui.Rect, s string, col microui.Color) {
-	x := r.X + (r.W-runeLen(s))/2
+	x := r.X + (r.W-renderer.StringWidth(s))/2
 	y := r.Y + r.H/2
 	drawTextc(ctx, x, y, s, col)
 }
@@ -615,7 +613,7 @@ func ui(ctx *microui.Context, term *renderer.Terminal) {
 	w, h := term.Size()
 
 	const canvas = microui.OptNoTitle | microui.OptNoResize | microui.OptNoScroll | microui.OptNoFrame
-	if ctx.BeginWindowEx("hokm", microui.Rect{X: 0, Y: 0, W: 10000, H: 10000}, canvas) == 0 {
+	if !ctx.BeginWindowEx("hokm", microui.Rect{X: 0, Y: 0, W: 10000, H: 10000}, canvas).Active() {
 		return
 	}
 	defer ctx.EndWindow()
@@ -722,7 +720,7 @@ func drawHand(ctx *microui.Context, g *Game, w, h int) int {
 	if interactive {
 		you = "▸ Your turn — click a card"
 	}
-	drawTextc(ctx, (w-runeLen(you))/2, h-7, you, ternColor(interactive, gold, textDim))
+	drawTextc(ctx, (w-renderer.StringWidth(you))/2, h-7, you, ternColor(interactive, gold, textDim))
 
 	n := len(cards)
 	cw, gap := 4, 1
@@ -758,7 +756,7 @@ func drawStatus(ctx *microui.Context, g *Game, w, h int) {
 
 	score := fmt.Sprintf("%s %d   |   %s %d   (first to 7)",
 		teamName[0], g.scores[0], teamName[1], g.scores[1])
-	drawTextc(ctx, w-runeLen(score)-2, 0, score, textBright)
+	drawTextc(ctx, w-renderer.StringWidth(score)-2, 0, score, textBright)
 
 	trump := "Trump: —"
 	tcol := textDim
@@ -770,13 +768,13 @@ func drawStatus(ctx *microui.Context, g *Game, w, h int) {
 
 	info := fmt.Sprintf("Hâkem: %s   Tricks — %s %d, %s %d",
 		seatLong(g.hakem), teamName[0], g.tricksWon[0], teamName[1], g.tricksWon[1])
-	drawTextc(ctx, w-runeLen(info)-2, 1, info, textBright)
+	drawTextc(ctx, w-renderer.StringWidth(info)-2, 1, info, textBright)
 
 	if g.message != "" {
-		drawTextc(ctx, (w-runeLen(g.message))/2, h-2, g.message, textBright)
+		drawTextc(ctx, (w-renderer.StringWidth(g.message))/2, h-2, g.message, textBright)
 	}
 	hint := "Click a highlighted card to play   •   Ctrl-C to quit"
-	drawTextc(ctx, (w-runeLen(hint))/2, h-1, hint, textDim)
+	drawTextc(ctx, (w-renderer.StringWidth(hint))/2, h-1, hint, textDim)
 }
 
 // drawOverlays draws the trump-choice buttons, and the hand/game-over banner
@@ -787,7 +785,7 @@ func drawOverlays(ctx *microui.Context, g *Game, w, h int) {
 	// Trump selection (only when you are Hâkem).
 	if g.phase == phaseChooseTrump && g.hakem == seatYou && !g.trumpChosen {
 		prompt := "Pick the trump suit (hokm):"
-		drawTextc(ctx, (w-runeLen(prompt))/2, cy-2, prompt, textBright)
+		drawTextc(ctx, (w-renderer.StringWidth(prompt))/2, cy-2, prompt, textBright)
 		bw, bgap := 11, 1
 		total := 4*bw + 3*bgap
 		x := (w - total) / 2
@@ -805,13 +803,13 @@ func drawOverlays(ctx *microui.Context, g *Game, w, h int) {
 	// Hand- and game-over banners with a continue button.
 	if g.phase == phaseHandDone || g.phase == phaseGameOver {
 		// Dim the table behind the banner for focus.
-		drawTextc(ctx, (w-runeLen(g.banner))/2, cy-2, g.banner, gold)
+		drawTextc(ctx, (w-renderer.StringWidth(g.banner))/2, cy-2, g.banner, gold)
 
 		label, action := "Next Hand", g.newHand
 		if g.phase == phaseGameOver {
 			label, action = "New Game", g.newGame
 		}
-		bw := runeLen(label) + 6
+		bw := renderer.StringWidth(label) + 6
 		r := microui.Rect{X: cx - bw/2, Y: cy + 1, W: bw, H: 3}
 		if button(ctx, r, label, btnFace, btnHot) {
 			action()

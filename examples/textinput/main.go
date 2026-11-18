@@ -20,7 +20,7 @@ import (
 var name string
 
 func ui(ctx *microui.Context) {
-	if ctx.BeginWindow("Text Input", microui.Rect{X: 2, Y: 1, W: 46, H: 11}) == 0 {
+	if !ctx.BeginWindow("Text Input", microui.Rect{X: 2, Y: 1, W: 46, H: 11}).Active() {
 		return
 	}
 	defer ctx.EndWindow()

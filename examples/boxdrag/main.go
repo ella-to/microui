@@ -27,7 +27,7 @@ func ui(ctx *microui.Context) {
 	// to draw and receive mouse input. It is clipped to the real screen by the
 	// renderer, so making it oversized is fine.
 	const canvas = microui.OptNoTitle | microui.OptNoResize | microui.OptNoScroll | microui.OptNoFrame
-	if ctx.BeginWindowEx("canvas", microui.Rect{X: 0, Y: 0, W: 1000, H: 1000}, canvas) == 0 {
+	if !ctx.BeginWindowEx("canvas", microui.Rect{X: 0, Y: 0, W: 1000, H: 1000}, canvas).Active() {
 		return
 	}
 	defer ctx.EndWindow()
