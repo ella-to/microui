@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"os"
 
-	miniui "ella.to/microui"
+	"ella.to/microui"
 	"ella.to/microui/renderer"
 )
 
@@ -20,8 +20,8 @@ const popupName = "edit-name"
 // the value the modal edits, persistent across frames.
 var name = "world"
 
-func ui(ctx *miniui.Context) {
-	if ctx.BeginWindow("Modal Demo", miniui.Rect{X: 2, Y: 1, W: 46, H: 9}) == 0 {
+func ui(ctx *microui.Context) {
+	if ctx.BeginWindow("Modal Demo", microui.Rect{X: 2, Y: 1, W: 46, H: 9}) == 0 {
 		return
 	}
 	defer ctx.EndWindow()
@@ -38,7 +38,7 @@ func ui(ctx *miniui.Context) {
 		close := false
 		ctx.LayoutRow([]int{6, 18}, 0)
 		ctx.Label("Name:")
-		if ctx.Textbox(&name)&miniui.ResSubmit != 0 {
+		if ctx.Textbox(&name)&microui.ResSubmit != 0 {
 			close = true
 		}
 		ctx.LayoutRow([]int{24}, 0)

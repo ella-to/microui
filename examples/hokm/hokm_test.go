@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	miniui "ella.to/microui"
+	"ella.to/microui"
 	"ella.to/microui/renderer"
 )
 
@@ -198,7 +198,7 @@ func TestFullHandPlaythrough(t *testing.T) {
 func TestRenderNoPanic(t *testing.T) {
 	term := renderer.NewHeadless(80, 24)
 	render := func() {
-		ctx := miniui.New()
+		ctx := microui.New()
 		renderer.Connect(ctx, term)
 		st := term.Style()
 		ctx.Style = &st

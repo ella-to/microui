@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"os"
 
-	miniui "ella.to/microui"
+	"ella.to/microui"
 	"ella.to/microui/renderer"
 )
 
@@ -47,9 +47,9 @@ func approach(cur, target float64) float64 {
 	return cur
 }
 
-func ui(ctx *miniui.Context) {
-	const canvas = miniui.OptNoTitle | miniui.OptNoResize | miniui.OptNoScroll | miniui.OptNoFrame
-	if ctx.BeginWindowEx("canvas", miniui.Rect{X: 0, Y: 0, W: 1000, H: 1000}, canvas) == 0 {
+func ui(ctx *microui.Context) {
+	const canvas = microui.OptNoTitle | microui.OptNoResize | microui.OptNoScroll | microui.OptNoFrame
+	if ctx.BeginWindowEx("canvas", microui.Rect{X: 0, Y: 0, W: 1000, H: 1000}, canvas) == 0 {
 		return
 	}
 	defer ctx.EndWindow()
@@ -57,7 +57,7 @@ func ui(ctx *miniui.Context) {
 	for _, b := range boxes {
 		// Hit-test against the maximum size so the target doesn't flip-flop as
 		// the box grows and shrinks under the cursor.
-		hit := miniui.Rect{X: b.cx - maxW/2, Y: b.cy - maxH/2, W: maxW, H: maxH}
+		hit := microui.Rect{X: b.cx - maxW/2, Y: b.cy - maxH/2, W: maxW, H: maxH}
 		hovered := ctx.MouseOver(hit)
 
 		tw, th := float64(minW), float64(minH)
@@ -68,14 +68,14 @@ func ui(ctx *miniui.Context) {
 		b.h = approach(b.h, th)
 
 		w, h := int(b.w+0.5), int(b.h+0.5)
-		r := miniui.Rect{X: b.cx - w/2, Y: b.cy - h/2, W: w, H: h}
+		r := microui.Rect{X: b.cx - w/2, Y: b.cy - h/2, W: w, H: h}
 
-		color := miniui.RGBA(60, 120, 110, 255)
+		color := microui.RGBA(60, 120, 110, 255)
 		if hovered {
-			color = miniui.RGBA(90, 200, 180, 255)
+			color = microui.RGBA(90, 200, 180, 255)
 		}
 		ctx.DrawRect(r, color)
-		ctx.DrawControlText(b.label, r, miniui.ColorText, miniui.OptAlignCenter)
+		ctx.DrawControlText(b.label, r, microui.ColorText, microui.OptAlignCenter)
 	}
 }
 

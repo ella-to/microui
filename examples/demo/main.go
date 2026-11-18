@@ -13,13 +13,13 @@ import (
 	"fmt"
 	"os"
 
-	miniui "ella.to/microui"
+	"ella.to/microui"
 	"ella.to/microui/renderer"
 )
 
 // demo state, persistent across frames.
 var (
-	bg         = [3]miniui.Real{40, 44, 52}
+	bg         = [3]microui.Real{40, 44, 52}
 	logbuf     string
 	logUpdated bool
 	textbuf    string
@@ -41,11 +41,11 @@ func main() {
 		os.Exit(1)
 	}
 	// The UI builder closes over term so the RGB sliders can recolor the
-	// driver's background. Everything else only touches *miniui.Context.
-	err = renderer.Run(term, func(ctx *miniui.Context) {
+	// driver's background. Everything else only touches *microui.Context.
+	err = renderer.Run(term, func(ctx *microui.Context) {
 		testWindow(ctx)
 		logWindow(ctx)
-		term.BG = miniui.RGBA(int(bg[0]), int(bg[1]), int(bg[2]), 255)
+		term.BG = microui.RGBA(int(bg[0]), int(bg[1]), int(bg[2]), 255)
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "demo:", err)
@@ -53,8 +53,8 @@ func main() {
 	}
 }
 
-func testWindow(ctx *miniui.Context) {
-	if ctx.BeginWindow("Demo", miniui.Rect{X: 1, Y: 1, W: 40, H: 22}) == 0 {
+func testWindow(ctx *microui.Context) {
+	if ctx.BeginWindow("Demo", microui.Rect{X: 1, Y: 1, W: 40, H: 22}) == 0 {
 		return
 	}
 	win := ctx.GetCurrentContainer()
@@ -69,7 +69,7 @@ func testWindow(ctx *miniui.Context) {
 		ctx.Label(fmt.Sprintf("%d, %d", win.Rect.W, win.Rect.H))
 	}
 
-	if ctx.HeaderEx("Buttons", miniui.OptExpanded) != 0 {
+	if ctx.HeaderEx("Buttons", microui.OptExpanded) != 0 {
 		ctx.LayoutRow([]int{12, 12}, 0)
 		if ctx.Button("Button 1") != 0 {
 			writeLog("Pressed Button 1")
@@ -91,7 +91,7 @@ func testWindow(ctx *miniui.Context) {
 		}
 	}
 
-	if ctx.HeaderEx("Tree", miniui.OptExpanded) != 0 {
+	if ctx.HeaderEx("Tree", microui.OptExpanded) != 0 {
 		if ctx.BeginTreenode("Options") != 0 {
 			ctx.Checkbox("Check 1", &checks[0])
 			ctx.Checkbox("Check 2", &checks[1])
@@ -100,21 +100,21 @@ func testWindow(ctx *miniui.Context) {
 		}
 	}
 
-	if ctx.HeaderEx("Background", miniui.OptExpanded) != 0 {
+	if ctx.HeaderEx("Background", microui.OptExpanded) != 0 {
 		ctx.LayoutRow([]int{7, -1}, 0)
 		ctx.Label("Red:")
-		ctx.SliderEx(&bg[0], 0, 255, 0, "%.0f", miniui.OptAlignCenter)
+		ctx.SliderEx(&bg[0], 0, 255, 0, "%.0f", microui.OptAlignCenter)
 		ctx.Label("Green:")
-		ctx.SliderEx(&bg[1], 0, 255, 0, "%.0f", miniui.OptAlignCenter)
+		ctx.SliderEx(&bg[1], 0, 255, 0, "%.0f", microui.OptAlignCenter)
 		ctx.Label("Blue:")
-		ctx.SliderEx(&bg[2], 0, 255, 0, "%.0f", miniui.OptAlignCenter)
+		ctx.SliderEx(&bg[2], 0, 255, 0, "%.0f", microui.OptAlignCenter)
 	}
 
 	ctx.EndWindow()
 }
 
-func logWindow(ctx *miniui.Context) {
-	if ctx.BeginWindow("Log", miniui.Rect{X: 42, Y: 1, W: 36, H: 22}) == 0 {
+func logWindow(ctx *microui.Context) {
+	if ctx.BeginWindow("Log", microui.Rect{X: 42, Y: 1, W: 36, H: 22}) == 0 {
 		return
 	}
 
@@ -133,7 +133,7 @@ func logWindow(ctx *miniui.Context) {
 	// input textbox + submit button
 	submitted := false
 	ctx.LayoutRow([]int{-9, -1}, 0)
-	if ctx.Textbox(&textbuf)&miniui.ResSubmit != 0 {
+	if ctx.Textbox(&textbuf)&microui.ResSubmit != 0 {
 		ctx.SetFocus(ctx.LastID())
 		submitted = true
 	}

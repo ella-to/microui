@@ -12,15 +12,15 @@ import (
 	"fmt"
 	"os"
 
-	miniui "ella.to/microui"
+	"ella.to/microui"
 	"ella.to/microui/renderer"
 )
 
 // edited text, persistent across frames.
 var name string
 
-func ui(ctx *miniui.Context) {
-	if ctx.BeginWindow("Text Input", miniui.Rect{X: 2, Y: 1, W: 46, H: 11}) == 0 {
+func ui(ctx *microui.Context) {
+	if ctx.BeginWindow("Text Input", microui.Rect{X: 2, Y: 1, W: 46, H: 11}) == 0 {
 		return
 	}
 	defer ctx.EndWindow()

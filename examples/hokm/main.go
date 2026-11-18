@@ -26,7 +26,7 @@ import (
 	"strconv"
 	"time"
 
-	miniui "ella.to/microui"
+	"ella.to/microui"
 	"ella.to/microui/renderer"
 )
 
@@ -510,25 +510,25 @@ func cheapestDiscard(hand []Card, legal []int, trump Suit) int {
 // ---- palette ----------------------------------------------------------------
 
 var (
-	feltOuter  = miniui.RGBA(11, 54, 33, 255)  // backdrop
-	feltInner  = miniui.RGBA(18, 84, 50, 255)  // table surface
-	feltLine   = miniui.RGBA(40, 120, 78, 255) // table edge
-	cardFace   = miniui.RGBA(236, 233, 220, 255)
-	cardHot    = miniui.RGBA(255, 248, 206, 255) // hovered, playable
-	cardDim    = miniui.RGBA(110, 120, 112, 255) // illegal this turn
-	cardBack   = miniui.RGBA(44, 70, 150, 255)
-	backPip    = miniui.RGBA(120, 150, 230, 255)
-	redSuit    = miniui.RGBA(200, 50, 50, 255)
-	blackSuit  = miniui.RGBA(28, 28, 32, 255)
-	winnerGlow = miniui.RGBA(232, 196, 78, 255) // trick-winner highlight
-	textBright = miniui.RGBA(238, 238, 230, 255)
-	textDim    = miniui.RGBA(170, 188, 176, 255)
-	gold       = miniui.RGBA(240, 205, 90, 255)
-	btnFace    = miniui.RGBA(58, 92, 162, 255)
-	btnHot     = miniui.RGBA(86, 126, 206, 255)
+	feltOuter  = microui.RGBA(11, 54, 33, 255)  // backdrop
+	feltInner  = microui.RGBA(18, 84, 50, 255)  // table surface
+	feltLine   = microui.RGBA(40, 120, 78, 255) // table edge
+	cardFace   = microui.RGBA(236, 233, 220, 255)
+	cardHot    = microui.RGBA(255, 248, 206, 255) // hovered, playable
+	cardDim    = microui.RGBA(110, 120, 112, 255) // illegal this turn
+	cardBack   = microui.RGBA(44, 70, 150, 255)
+	backPip    = microui.RGBA(120, 150, 230, 255)
+	redSuit    = microui.RGBA(200, 50, 50, 255)
+	blackSuit  = microui.RGBA(28, 28, 32, 255)
+	winnerGlow = microui.RGBA(232, 196, 78, 255) // trick-winner highlight
+	textBright = microui.RGBA(238, 238, 230, 255)
+	textDim    = microui.RGBA(170, 188, 176, 255)
+	gold       = microui.RGBA(240, 205, 90, 255)
+	btnFace    = microui.RGBA(58, 92, 162, 255)
+	btnHot     = microui.RGBA(86, 126, 206, 255)
 )
 
-func suitColor(s Suit) miniui.Color {
+func suitColor(s Suit) microui.Color {
 	if s == hearts || s == diamonds {
 		return redSuit
 	}
@@ -552,19 +552,19 @@ func seatLong(seat int) string {
 func runeLen(s string) int { return len([]rune(s)) }
 
 // drawTextc draws s with its top-left at (x,y) in color col.
-func drawTextc(ctx *miniui.Context, x, y int, s string, col miniui.Color) {
-	ctx.DrawText(nil, s, miniui.Vec2{X: x, Y: y}, col)
+func drawTextc(ctx *microui.Context, x, y int, s string, col microui.Color) {
+	ctx.DrawText(nil, s, microui.Vec2{X: x, Y: y}, col)
 }
 
 // drawCenteredIn draws s centered within rect r in color col.
-func drawCenteredIn(ctx *miniui.Context, r miniui.Rect, s string, col miniui.Color) {
+func drawCenteredIn(ctx *microui.Context, r microui.Rect, s string, col microui.Color) {
 	x := r.X + (r.W-runeLen(s))/2
 	y := r.Y + r.H/2
 	drawTextc(ctx, x, y, s, col)
 }
 
 // drawCard paints a face-up card filling rect r with the given face color.
-func drawCard(ctx *miniui.Context, r miniui.Rect, c Card, face miniui.Color) {
+func drawCard(ctx *microui.Context, r microui.Rect, c Card, face microui.Color) {
 	ctx.DrawRect(r, face)
 	drawCenteredIn(ctx, r, cardLabel(c), suitColor(c.Suit))
 }
@@ -572,20 +572,20 @@ func drawCard(ctx *miniui.Context, r miniui.Rect, c Card, face miniui.Color) {
 // drawPlayableCard draws a face-up card with a gold base on its own bottom row,
 // marking it as a legal play. The base stays inside the card's footprint, so it
 // never paints into the rows beneath the hand.
-func drawPlayableCard(ctx *miniui.Context, r miniui.Rect, c Card, face miniui.Color) {
+func drawPlayableCard(ctx *microui.Context, r microui.Rect, c Card, face microui.Color) {
 	ctx.DrawRect(r, face)
-	ctx.DrawRect(miniui.Rect{X: r.X, Y: r.Y + r.H - 1, W: r.W, H: 1}, gold)
+	ctx.DrawRect(microui.Rect{X: r.X, Y: r.Y + r.H - 1, W: r.W, H: 1}, gold)
 	drawCenteredIn(ctx, r, cardLabel(c), suitColor(c.Suit))
 }
 
 // drawCardBack paints a face-down card.
-func drawCardBack(ctx *miniui.Context, r miniui.Rect) {
+func drawCardBack(ctx *microui.Context, r microui.Rect) {
 	ctx.DrawRect(r, cardBack)
 	drawCenteredIn(ctx, r, "▚▚", backPip)
 }
 
 // button draws a clickable button and reports whether it was clicked this frame.
-func button(ctx *miniui.Context, r miniui.Rect, label string, face, hot miniui.Color) bool {
+func button(ctx *microui.Context, r microui.Rect, label string, face, hot microui.Color) bool {
 	over := ctx.MouseOver(r)
 	col := face
 	if over {
@@ -593,7 +593,7 @@ func button(ctx *miniui.Context, r miniui.Rect, label string, face, hot miniui.C
 	}
 	ctx.DrawRect(r, col)
 	drawCenteredIn(ctx, r, label, textBright)
-	return over && ctx.MousePressed()&miniui.MouseLeft != 0
+	return over && ctx.MousePressed()&microui.MouseLeft != 0
 }
 
 // ---- the UI -----------------------------------------------------------------
@@ -601,21 +601,21 @@ func button(ctx *miniui.Context, r miniui.Rect, label string, face, hot miniui.C
 var game = &Game{}
 
 // trickSlots returns each seat's card position around the center of the table.
-func trickSlots(cx, cy int) [4]miniui.Rect {
-	var s [4]miniui.Rect
-	s[seatYou] = miniui.Rect{X: cx - 2, Y: cy + 2, W: 4, H: 3}
-	s[seatRight] = miniui.Rect{X: cx + 9, Y: cy - 1, W: 4, H: 3}
-	s[seatPartner] = miniui.Rect{X: cx - 2, Y: cy - 4, W: 4, H: 3}
-	s[seatLeft] = miniui.Rect{X: cx - 13, Y: cy - 1, W: 4, H: 3}
+func trickSlots(cx, cy int) [4]microui.Rect {
+	var s [4]microui.Rect
+	s[seatYou] = microui.Rect{X: cx - 2, Y: cy + 2, W: 4, H: 3}
+	s[seatRight] = microui.Rect{X: cx + 9, Y: cy - 1, W: 4, H: 3}
+	s[seatPartner] = microui.Rect{X: cx - 2, Y: cy - 4, W: 4, H: 3}
+	s[seatLeft] = microui.Rect{X: cx - 13, Y: cy - 1, W: 4, H: 3}
 	return s
 }
 
-func ui(ctx *miniui.Context, term *renderer.Terminal) {
+func ui(ctx *microui.Context, term *renderer.Terminal) {
 	term.BG = feltOuter
 	w, h := term.Size()
 
-	const canvas = miniui.OptNoTitle | miniui.OptNoResize | miniui.OptNoScroll | miniui.OptNoFrame
-	if ctx.BeginWindowEx("hokm", miniui.Rect{X: 0, Y: 0, W: 10000, H: 10000}, canvas) == 0 {
+	const canvas = microui.OptNoTitle | microui.OptNoResize | microui.OptNoScroll | microui.OptNoFrame
+	if ctx.BeginWindowEx("hokm", microui.Rect{X: 0, Y: 0, W: 10000, H: 10000}, canvas) == 0 {
 		return
 	}
 	defer ctx.EndWindow()
@@ -651,11 +651,11 @@ func ui(ctx *miniui.Context, term *renderer.Terminal) {
 
 // drawTable paints the felt, each seat's name/turn indicator and remaining-card
 // count, and any cards currently on the table.
-func drawTable(ctx *miniui.Context, g *Game, w, h int) {
+func drawTable(ctx *microui.Context, g *Game, w, h int) {
 	// The felt stops short of the bottom rows, leaving room below it for the
 	// "You" label, the hand (with a row above it for the hover lift), and the
 	// message and hint lines on the last two rows.
-	felt := miniui.Rect{X: 3, Y: 2, W: w - 6, H: h - 9}
+	felt := microui.Rect{X: 3, Y: 2, W: w - 6, H: h - 9}
 	ctx.DrawRect(felt, feltInner)
 	ctx.DrawBox(felt, feltLine)
 
@@ -682,7 +682,7 @@ func drawTable(ctx *miniui.Context, g *Game, w, h int) {
 
 // drawSeatBanner draws one AI seat's name (gold when it is their turn) plus a
 // face-down stack and remaining-card count.
-func drawSeatBanner(ctx *miniui.Context, g *Game, seat, x, y int) {
+func drawSeatBanner(ctx *microui.Context, g *Game, seat, x, y int) {
 	name := seatLong(seat)
 	if seat == g.hakem {
 		name += " ★" // Hâkem marker
@@ -693,14 +693,14 @@ func drawSeatBanner(ctx *miniui.Context, g *Game, seat, x, y int) {
 		name = "▸ " + name
 	}
 	drawTextc(ctx, x, y, name, col)
-	drawCardBack(ctx, miniui.Rect{X: x, Y: y + 1, W: 4, H: 2})
+	drawCardBack(ctx, microui.Rect{X: x, Y: y + 1, W: 4, H: 2})
 	drawTextc(ctx, x+5, y+2, "×"+strconv.Itoa(len(g.hands[seat])), textDim)
 }
 
 // drawHand draws the human's cards along the bottom and returns the index of a
 // legal card clicked this frame, or -1. While choosing trump it shows only the
 // first five cards (non-interactive), per the rules.
-func drawHand(ctx *miniui.Context, g *Game, w, h int) int {
+func drawHand(ctx *microui.Context, g *Game, w, h int) int {
 	cards := g.hands[seatYou]
 	if g.phase == phaseChooseTrump && g.hakem == seatYou && !g.trumpChosen {
 		cards = g.firstFive
@@ -731,7 +731,7 @@ func drawHand(ctx *miniui.Context, g *Game, w, h int) int {
 	y := h - 5
 	clicked := -1
 	for i, c := range cards {
-		r := miniui.Rect{X: startX + i*(cw+gap), Y: y, W: cw, H: 3}
+		r := microui.Rect{X: startX + i*(cw+gap), Y: y, W: cw, H: 3}
 		switch {
 		case !interactive:
 			drawCard(ctx, r, c, cardFace)
@@ -739,9 +739,9 @@ func drawHand(ctx *miniui.Context, g *Game, w, h int) int {
 			drawCard(ctx, r, c, cardDim) // can't follow with this card right now
 		case ctx.MouseOver(r):
 			// Hovered playable card lifts up a row for a tactile feel.
-			lifted := miniui.Rect{X: r.X, Y: r.Y - 1, W: cw, H: 3}
+			lifted := microui.Rect{X: r.X, Y: r.Y - 1, W: cw, H: 3}
 			drawPlayableCard(ctx, lifted, c, cardHot)
-			if ctx.MousePressed()&miniui.MouseLeft != 0 {
+			if ctx.MousePressed()&microui.MouseLeft != 0 {
 				clicked = i
 			}
 		default:
@@ -752,7 +752,7 @@ func drawHand(ctx *miniui.Context, g *Game, w, h int) int {
 }
 
 // drawStatus draws the title bar: scoreboard, trump, Hâkem and the message line.
-func drawStatus(ctx *miniui.Context, g *Game, w, h int) {
+func drawStatus(ctx *microui.Context, g *Game, w, h int) {
 	title := "♠ HOKM ♥"
 	drawTextc(ctx, 2, 0, title, gold)
 
@@ -781,7 +781,7 @@ func drawStatus(ctx *miniui.Context, g *Game, w, h int) {
 
 // drawOverlays draws the trump-choice buttons, and the hand/game-over banner
 // with its action button, depending on phase.
-func drawOverlays(ctx *miniui.Context, g *Game, w, h int) {
+func drawOverlays(ctx *microui.Context, g *Game, w, h int) {
 	cx, cy := w/2, h/2
 
 	// Trump selection (only when you are Hâkem).
@@ -792,7 +792,7 @@ func drawOverlays(ctx *miniui.Context, g *Game, w, h int) {
 		total := 4*bw + 3*bgap
 		x := (w - total) / 2
 		for s := spades; s <= clubs; s++ {
-			r := miniui.Rect{X: x, Y: cy, W: bw, H: 3}
+			r := microui.Rect{X: x, Y: cy, W: bw, H: 3}
 			label := suitGlyph(s) + " " + suitFull(s)
 			if button(ctx, r, label, btnFace, btnHot) {
 				g.setTrump(s)
@@ -812,7 +812,7 @@ func drawOverlays(ctx *miniui.Context, g *Game, w, h int) {
 			label, action = "New Game", g.newGame
 		}
 		bw := runeLen(label) + 6
-		r := miniui.Rect{X: cx - bw/2, Y: cy + 1, W: bw, H: 3}
+		r := microui.Rect{X: cx - bw/2, Y: cy + 1, W: bw, H: 3}
 		if button(ctx, r, label, btnFace, btnHot) {
 			action()
 		}
@@ -820,7 +820,7 @@ func drawOverlays(ctx *miniui.Context, g *Game, w, h int) {
 }
 
 // ternColor is a tiny ternary helper for colors.
-func ternColor(cond bool, a, b miniui.Color) miniui.Color {
+func ternColor(cond bool, a, b microui.Color) microui.Color {
 	if cond {
 		return a
 	}
@@ -834,7 +834,7 @@ func main() {
 		os.Exit(1)
 	}
 	game.newGame()
-	err = renderer.Run(term, func(ctx *miniui.Context) { ui(ctx, term) })
+	err = renderer.Run(term, func(ctx *microui.Context) { ui(ctx, term) })
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "hokm:", err)
 		os.Exit(1)
