@@ -78,6 +78,9 @@ func blend(dst, src microui.Color) microui.Color {
 // their glyphs, so overlays such as a modal backdrop dim what is beneath.
 func (s *screen) fillRect(rect, clip microui.Rect, color microui.Color) {
 	r := rect.Intersect(clip).Intersect(s.bounds())
+	if r.Empty() {
+		return // an empty intersection may still carry an off-screen X
+	}
 	opaque := color.A == 255
 	for y := r.Y; y < r.Y+r.H; y++ {
 		row := s.cells[y*s.w+r.X : y*s.w+r.X+r.W]

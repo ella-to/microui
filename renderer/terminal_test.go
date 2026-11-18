@@ -292,3 +292,23 @@ func TestPresentRewritesShortGapsInsteadOfMoving(t *testing.T) {
 		t.Fatalf("expected one cursor move and the gap rewritten, got %q", s)
 	}
 }
+
+func TestDrawingOffScreenIsSafe(t *testing.T) {
+	term := NewHeadless(10, 4)
+	term.Clear(microui.RGBA(0, 0, 0, 255))
+	white := microui.RGBA(255, 255, 255, 255)
+	for _, r := range []microui.Rect{
+		{X: 12, Y: 1, W: 5, H: 2},    // past the right edge
+		{X: 12, Y: 3, W: 5, H: 1},    // past the right edge on the last row
+		{X: -9, Y: 1, W: 5, H: 2},    // past the left edge
+		{X: 2, Y: 7, W: 5, H: 2},     // below
+		{X: 2, Y: -5, W: 5, H: 2},    // above
+		{X: 2, Y: 1, W: -3, H: 2},    // negative size
+		{X: 0, Y: 0, W: 100, H: 100}, // covers everything
+	} {
+		term.FillRect(r, white)
+		term.FillRect(r, white.WithAlpha(100))
+		term.DrawText(nil, "日本語テキスト", microui.Vec2{X: r.X, Y: r.Y}, white)
+		term.DrawIcon(microui.IconCheck, r, white)
+	}
+}
