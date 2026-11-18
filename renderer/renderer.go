@@ -4,14 +4,15 @@
 // commands (filled rectangles, text, icons, clip regions). This package turns
 // that command list into calls on a small Renderer interface, so the same UI
 // code runs unchanged on any backend — a terminal, a GPU canvas, a web canvas,
-// and so on. Swapping the engine is swapping the Renderer.
+// and so on. Swapping the engine is swapping the Driver.
 //
 // The flow is:
 //
-//	term, _ := renderer.NewTerminal()      // pick a backend (the engine)
-//	renderer.Run(term, func(ctx *microui.Context) {
+//	term, err := renderer.NewTerminal() // pick a backend (the engine)
+//	if err != nil { ... }
+//	err = renderer.Run(term, func(ctx *microui.Context) {
 //	    // build the UI; it only ever sees *microui.Context
-//	    if ctx.BeginWindow("Hi", microui.Rect{X: 1, Y: 1, W: 30, H: 8}) != 0 {
+//	    if ctx.BeginWindow("Hi", microui.Rect{X: 1, Y: 1, W: 30, H: 8}).Active() {
 //	        ctx.Button("OK")
 //	        ctx.EndWindow()
 //	    }
@@ -24,19 +25,20 @@
 package renderer
 
 import (
+	"context"
 	"time"
 
 	"ella.to/microui"
 )
 
-// Renderer is a drawing backend for microui. Paint walks a frame's command list
-// and calls these methods in order; a backend only has to know how to measure
-// text and paint the four primitives onto its surface.
+// Renderer is a drawing backend for microui. Paint walks a frame's command
+// list and calls these methods in order; a backend only has to know how to
+// measure text and paint the four primitives onto its surface.
 //
 // Clipping is modelled as a scissor rectangle: SetClip sets the region that
 // subsequent FillRect / DrawText / DrawIcon calls must stay within, and Clear
-// resets it to the whole surface. (microui already pre-clips rectangles, but it
-// relies on the scissor for text and icons.)
+// resets it to the whole surface. (microui already pre-clips rectangles, but
+// it relies on the scissor for text and icons.)
 type Renderer interface {
 	// TextWidth and TextHeight measure rendered text in the surface's own units
 	// (pixels, character cells, ...). They are wired into the context as its
@@ -54,7 +56,8 @@ type Renderer interface {
 	// SetClip restricts following draws to rect (intersected with the surface).
 	SetClip(rect microui.Rect)
 
-	// FillRect fills rect with a solid color.
+	// FillRect fills rect with color. Colors with 0 < A < 255 should be
+	// blended over what is already there when the backend can.
 	FillRect(rect microui.Rect, color microui.Color)
 
 	// DrawText draws str with its top-left corner at pos.
@@ -70,8 +73,7 @@ type Renderer interface {
 
 // Driver is a Renderer that can also run a live UI: it supplies the style and
 // background to use, pumps platform input into the context, and tears itself
-// down. Run drives it. Concrete drivers (e.g. Terminal) live in this package;
-// adding a new engine means implementing this interface.
+// down. Run drives it. Adding a new engine means implementing this interface.
 type Driver interface {
 	Renderer
 
@@ -90,6 +92,19 @@ type Driver interface {
 
 	// Close restores any platform state. It is safe to call more than once.
 	Close() error
+}
+
+// Waker is an optional Driver extension. Run selects on the returned channel
+// alongside its frame ticker, so a driver that signals it whenever input
+// arrives gets an immediate redraw instead of waiting for the next tick.
+type Waker interface {
+	Wake() <-chan struct{}
+}
+
+// Errer is an optional Driver extension reporting why Poll asked to quit.
+// When Poll returns true, Run returns Err() (nil means a normal quit).
+type Errer interface {
+	Err() error
 }
 
 // Connect wires a renderer's text metrics into ctx as its layout callbacks.
@@ -129,34 +144,91 @@ func Paint(r Renderer, ctx *microui.Context, bg microui.Color) {
 	r.Present()
 }
 
-// frameRate is the loop's target redraw rate. A fixed cadence keeps animations
-// smooth without the UI builder needing a clock.
-const frameRate = 30
+// DefaultFPS is the frame rate Run uses unless WithFPS overrides it.
+const DefaultFPS = 30
 
-// Run drives a Driver's frame loop until the user quits, then closes it.
+// runConfig collects the RunOptions.
+type runConfig struct {
+	fps   int
+	ctx   context.Context
+	setup func(*microui.Context)
+}
+
+// RunOption configures Run.
+type RunOption func(*runConfig)
+
+// WithFPS sets the steady redraw rate (frames per second) Run uses to keep
+// animations moving. Drivers implementing Waker also redraw as soon as input
+// arrives, so a low rate does not make the UI feel sluggish.
+func WithFPS(fps int) RunOption {
+	return func(c *runConfig) { c.fps = max(fps, 1) }
+}
+
+// WithContext makes Run return when ctx is done. This is how a UI quits
+// itself — cancel the context from a "Quit" button:
 //
-// Each frame it polls input into a fresh context, calls ui to build the frame,
-// then paints and presents it. The ui builder receives only a *microui.Context,
-// so it is completely independent of which Driver is running — that is what
-// makes the engine swappable.
-func Run(d Driver, ui func(ctx *microui.Context)) error {
-	ctx := microui.New()
-	Connect(ctx, d)
-	st := d.Style()
-	ctx.Style = &st
+//	ctx, cancel := context.WithCancel(context.Background())
+//	renderer.Run(term, func(ui *microui.Context) {
+//	    if ui.Button("Quit").Submitted() { cancel() }
+//	}, renderer.WithContext(ctx))
+func WithContext(ctx context.Context) RunOption {
+	return func(c *runConfig) { c.ctx = ctx }
+}
+
+// WithSetup runs fn once on the new microui.Context, after the driver's style
+// is installed and before the first frame: the place to tweak the style,
+// replace DrawFrame, and so on.
+func WithSetup(fn func(*microui.Context)) RunOption {
+	return func(c *runConfig) { c.setup = fn }
+}
+
+// Run drives a Driver's frame loop until the user quits (or the WithContext
+// context is done), then closes it. The driver is closed even if ui panics,
+// so a terminal is never left in raw mode.
+//
+// Each frame it polls input, calls ui to build the frame between Begin and
+// End, then paints and presents it. The ui builder receives only a
+// *microui.Context, so it is completely independent of which Driver is
+// running — that is what makes the engine swappable.
+func Run(d Driver, ui func(ctx *microui.Context), opts ...RunOption) error {
+	cfg := runConfig{fps: DefaultFPS, ctx: context.Background()}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	defer d.Close()
 
-	ticker := time.NewTicker(time.Second / frameRate)
+	mu := microui.New()
+	Connect(mu, d)
+	st := d.Style()
+	mu.Style = &st
+	if cfg.setup != nil {
+		cfg.setup(mu)
+	}
+
+	var wake <-chan struct{}
+	if w, ok := d.(Waker); ok {
+		wake = w.Wake()
+	}
+	ticker := time.NewTicker(time.Second / time.Duration(cfg.fps))
 	defer ticker.Stop()
 
-	for {
-		if d.Poll(ctx) {
+	for cfg.ctx.Err() == nil {
+		if d.Poll(mu) {
+			if e, ok := d.(Errer); ok {
+				return e.Err()
+			}
 			return nil
 		}
-		ctx.Begin()
-		ui(ctx)
-		ctx.End()
-		Paint(d, ctx, d.Background())
-		<-ticker.C
+		mu.Begin()
+		ui(mu)
+		mu.End()
+		Paint(d, mu, d.Background())
+
+		select {
+		case <-ticker.C:
+		case <-wake:
+		case <-cfg.ctx.Done():
+		}
 	}
+	return nil
 }
