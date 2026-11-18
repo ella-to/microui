@@ -27,7 +27,7 @@ import (
 	"time"
 
 	miniui "ella.to/microui"
-	"ella.to/microui/pkg/renderer"
+	"ella.to/microui/renderer"
 )
 
 // ---- cards ------------------------------------------------------------------

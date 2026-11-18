@@ -14,7 +14,7 @@ import (
 	"os"
 
 	miniui "ella.to/microui"
-	"ella.to/microui/pkg/renderer"
+	"ella.to/microui/renderer"
 )
 
 const (

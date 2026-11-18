@@ -13,7 +13,7 @@ import (
 	"os"
 
 	miniui "ella.to/microui"
-	"ella.to/microui/pkg/renderer"
+	"ella.to/microui/renderer"
 )
 
 // edited text, persistent across frames.

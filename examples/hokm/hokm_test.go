@@ -6,7 +6,7 @@ import (
 	"time"
 
 	miniui "ella.to/microui"
-	"ella.to/microui/pkg/renderer"
+	"ella.to/microui/renderer"
 )
 
 func TestBeats(t *testing.T) {

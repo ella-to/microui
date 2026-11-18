@@ -114,7 +114,7 @@ func render(ctx *miniui.Context) {
 That's the entire integration surface: implement `fillRect`, `drawText`,
 `drawIcon` and `setClipRect` for your platform and every control just works.
 
-You rarely have to write that loop by hand: the [`pkg/renderer`](pkg/renderer)
+You rarely have to write that loop by hand: the [`renderer`](renderer)
 package wraps it behind a small swappable interface and ships a ready-made
 terminal backend, so the same UI code runs on any engine. See
 [Renderers](#renderers).
@@ -517,7 +517,7 @@ followed by `InputKeyUp` — miniui consumes "pressed this frame" at `End()`.
 ## Renderers
 
 You can consume `ctx.Commands()` directly (see [Rendering](#rendering)), but the
-[`pkg/renderer`](pkg/renderer) package wraps that loop behind a small interface
+[`renderer`](renderer) package wraps that loop behind a small interface
 so the *same UI code* runs on any backend — a terminal, a GPU canvas, a web
 canvas — and switching backends is switching one line.
 
@@ -582,7 +582,7 @@ If you only want the command-list dispatch (driving your own loop), implement
 after each `ctx.End()`.
 
 The default backend is the terminal in
-[`pkg/renderer/terminal.go`](pkg/renderer/terminal.go): each character cell is
+[`renderer/terminal.go`](renderer/terminal.go): each character cell is
 one "pixel", text is the terminal font, input arrives via SGR mouse reporting
 plus the keyboard, and raw mode is set with `stty(1)` — still no cgo and no
 dependencies. It is a compact reference for writing your own backend.
