@@ -1,34 +1,89 @@
-# miniui
+# microui
 
-A *tiny*, portable, immediate-mode UI library for Go — a pure-Go (no cgo) port
-of [rxi/microui](https://github.com/rxi/microui).
-
-```
-import "ella.to/microui"
-```
-
-* **Pure Go, no cgo, no dependencies** — just the standard library.
-* **Renderer-agnostic** — miniui never draws anything itself. Each frame it
-  produces a list of draw commands (filled rectangles, text, icons, clip
-  regions) that you render with any backend: a GPU, a software canvas, or even a
-  [terminal](#renderers).
-* **Immediate mode** — there is no widget tree to keep in sync. You re-describe
-  the whole UI every frame with plain `if`/`for` statements; the library tracks
-  just enough retained state (focus, hover, window positions, scroll) between
-  frames for you.
-* **Built-in controls:** window, scrollable panel, popup, button, checkbox,
-  slider, number, textbox, label, word-wrapped text, collapsible header and
-  tree node — plus the primitives to build your own.
-
----
-
-## Install
+A *tiny*, portable, immediate-mode UI library for Go: a pure-Go (no cgo, no
+dependencies) port of [rxi/microui](https://github.com/rxi/microui), with a
+fast, robust terminal renderer and a renderer interface that targets any
+platform.
 
 ```sh
 go get ella.to/microui
 ```
 
-Requires Go 1.23+ (the command iterator uses `iter.Seq`).
+Requires **Go 1.27+**: value controls and ID helpers are generic methods.
+
+* **Immediate mode.** No widget tree to keep in sync. Describe the whole UI
+  every frame with plain `if`/`for`; the library keeps just enough state
+  (focus, hover, window geometry, scroll) between frames.
+* **Renderer-agnostic.** microui never draws. Each frame produces a list of
+  draw commands (rects, text, icons, clip regions) that any backend can
+  paint: a terminal, a browser canvas, a GPU window, an SVG file.
+* **Batteries included.** Windows, scrollable panels, popups, buttons,
+  checkboxes, sliders and number fields over any numeric type, a textbox with
+  full caret/selection editing, labels, word-wrapped text, headers and tree
+  nodes, plus the primitives to build your own controls.
+* **A solid terminal backend.** Diffed, flicker-free output; truecolor, 256 or
+  16 colors; alpha blending; correct wide characters; mouse, keyboard and
+  bracketed paste; resize, suspend and clean restore; Unix and Windows.
+
+**→ Read the [GUIDE](GUIDE.md)** for the full walkthrough: layout, state and
+IDs, custom controls, theming, modals, keyboard focus, goroutines, testing,
+and writing your own renderer.
+
+---
+
+## Hello, terminal
+
+```go
+package main
+
+import (
+	"log"
+
+	"ella.to/microui"
+	"ella.to/microui/renderer"
+)
+
+type app struct {
+	name   string
+	volume float64
+	level  int
+	muted  bool
+}
+
+func (a *app) ui(ctx *microui.Context) {
+	if !ctx.BeginWindow("Hello", microui.Rect{X: 2, Y: 1, W: 44, H: 14}).Active() {
+		return
+	}
+	defer ctx.EndWindow()
+
+	ctx.LayoutRow([]int{9, -1}, 1) // label column + a cell filling the rest
+	ctx.Label("Name:")
+	ctx.Textbox(&a.name)
+	ctx.Label("Volume:")
+	ctx.Slider(&a.volume, 0, 1) // float64
+	ctx.Label("Level:")
+	ctx.Slider(&a.level, 1, 10) // int, the same generic method
+
+	ctx.LayoutRow([]int{-1}, 1)
+	ctx.Checkbox("Muted", &a.muted)
+	if ctx.Button("Save").Submitted() {
+		log.Printf("saved %+v", *a)
+	}
+}
+
+func main() {
+	term, err := renderer.NewTerminal()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := renderer.Run(term, (&app{name: "world"}).ui); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+Drag title bars to move windows, drag the bottom-right corner to resize, use
+the wheel to scroll, and press **Ctrl-C** to quit.
 
 ---
 
@@ -36,593 +91,150 @@ Requires Go 1.23+ (the command iterator uses `iter.Seq`).
 
 Every frame is three steps:
 
-1. **Feed input** — tell miniui where the mouse is, what was clicked, what was
-   typed.
-2. **Build the UI** — between `Begin()` and `End()`, call control functions.
-   Their return values tell you what the user did *this frame*.
-3. **Render** — walk the command list miniui produced and draw it with your
-   backend.
+1. **Feed input:** where the mouse is, what was clicked, what was typed.
+2. **Build the UI:** between `Begin()` and `End()`, call controls. Their
+   `Result` tells you what happened *this frame*: `.Submitted()`,
+   `.Changed()`, `.Active()`.
+3. **Render:** walk the command list with any backend.
 
-Before the first frame you must set two callbacks so the layout engine knows how
-big text will be in your renderer's units (pixels, cells, whatever you like).
-
-### Minimal complete example
+`renderer.Run` does all three for any `renderer.Driver`. Without it, the
+whole integration surface is:
 
 ```go
-package main
+ctx := microui.New()
+ctx.TextWidth = func(f microui.Font, s string) int { return measure(f, s) } // your units
+ctx.TextHeight = func(f microui.Font) int { return lineHeight(f) }
 
-import "ella.to/microui"
-
-// State lives outside the frame loop so it persists across frames.
-var (
-	name    string
-	volume  float32 = 0.5
-	enabled bool
-)
-
-func main() {
-	ctx := miniui.New()
-	ctx.TextWidth = func(_ miniui.Font, s string) int { return len(s) * 7 } // px
-	ctx.TextHeight = func(_ miniui.Font) int { return 14 }
-
-	for { // your platform's main loop
-		feedInput(ctx) // see "Feeding input" below
-
-		ctx.Begin()
-		if ctx.BeginWindow("Demo", miniui.Rect{X: 10, Y: 10, W: 240, H: 160}) != 0 {
-			ctx.LayoutRow([]int{60, -1}, 0) // label column + a field filling the rest
-			ctx.Label("Name:")
-			ctx.Textbox(&name)
-
-			ctx.LayoutRow([]int{-1}, 0) // one full-width cell per row
-			ctx.Checkbox("Enabled", &enabled)
-			ctx.Slider(&volume, 0, 1)
-			if ctx.Button("Save") != 0 {
-				save(name, volume, enabled)
-			}
-			ctx.EndWindow()
-		}
-		ctx.End()
-
-		render(ctx) // see "Rendering" below
-	}
-}
-```
-
-### Rendering
-
-`ctx.Commands()` is an iterator that yields the frame's draw commands in correct
-back-to-front order (overlapping windows are interleaved for you):
-
-```go
-func render(ctx *miniui.Context) {
-	for cmd := range ctx.Commands() {
+for running {
+	feedInput(ctx) // ctx.InputMouseMove / InputMouseDown / InputText / InputKeyDown ...
+	ctx.Begin()
+	ui(ctx)
+	ctx.End()
+	for cmd := range ctx.Commands() { // back-to-front, overlapping windows interleaved
 		switch cmd.Type {
-		case miniui.CommandRect:
-			fillRect(cmd.Rect, cmd.Color) // your backend
-		case miniui.CommandText:
-			drawText(cmd.Str, cmd.Pos, cmd.Color, cmd.Font)
-		case miniui.CommandIcon:
-			drawIcon(cmd.Icon, cmd.Rect, cmd.Color) // IconClose/Check/Collapsed/Expanded
-		case miniui.CommandClip:
-			setClipRect(cmd.Rect) // clip following draws to this rectangle
+		case microui.CommandRect: fillRect(cmd.Rect, cmd.Color)
+		case microui.CommandText: drawText(cmd.Str, cmd.Pos, cmd.Color, cmd.Font)
+		case microui.CommandIcon: drawIcon(cmd.Icon, cmd.Rect, cmd.Color)
+		case microui.CommandClip: setClip(cmd.Rect)
 		}
 	}
 }
 ```
 
-That's the entire integration surface: implement `fillRect`, `drawText`,
-`drawIcon` and `setClipRect` for your platform and every control just works.
-
-You rarely have to write that loop by hand: the [`renderer`](renderer)
-package wraps it behind a small swappable interface and ships a ready-made
-terminal backend, so the same UI code runs on any engine. See
-[Renderers](#renderers).
-
----
-
-## Controls
-
-Each control returns an `int` bitmask of result flags (see
-[Result flags](#result-flags)). The smallest useful snippet for each:
-
-### Button
+## Controls at a glance
 
 ```go
-if ctx.Button("Save") != 0 { // non-zero == clicked this frame
-	save()
-}
-```
+ctx.Label("Status:")
+ctx.Text("A paragraph that wraps to the column width.")
+if ctx.Button("Save").Submitted() { save() }
+if ctx.Checkbox("Enabled", &enabled).Changed() { apply() }
+ctx.Slider(&gain, 0, 10)         // any numeric type; shift-click to type a value
+ctx.Number(&count, 1)            // drag to change
+if ctx.Textbox(&query).Submitted() { search(query) }
+ctx.TextboxPassword(&secret)
 
-### Label and wrapped text
+if ctx.Header("Advanced").Active() { ... }
+if ctx.BeginTreenode("Root").Active() { ...; ctx.EndTreenode() }
 
-```go
-ctx.Label("Status:")                       // one line, left-aligned in its cell
-ctx.Text("A longer paragraph that is " +   // word-wrapped to the column width,
-	"automatically wrapped across lines.") // spanning as many rows as needed
-```
-
-### Checkbox
-
-```go
-var enabled bool // must persist across frames
-
-if ctx.Checkbox("Enabled", &enabled)&miniui.ResChange != 0 {
-	// value just toggled
-}
-```
-
-### Slider and number
-
-```go
-var gain float32 = 1.0 // persists across frames
-
-ctx.Slider(&gain, 0, 10)  // drag between 0 and 10
-ctx.Number(&gain, 0.1)    // drag to nudge by 0.1 per unit of mouse movement
-
-// With a step, value format and alignment:
-ctx.SliderEx(&gain, 0, 10, 0.5, "%.1f", miniui.OptAlignCenter)
-```
-
-Tip: shift-click a slider or number to type an exact value.
-
-### Textbox
-
-```go
-var query string // persists across frames
-
-res := ctx.Textbox(&query)
-if res&miniui.ResChange != 0 { /* text changed */ }
-if res&miniui.ResSubmit != 0 { /* user pressed Enter */ }
-```
-
-A focused textbox supports full caret editing when the backend reports the
-editing keys: arrows move the caret (Shift extends the selection, Ctrl jumps
-to the ends), Home/End and Delete work, `KeySelectAll` selects everything,
-clicking places the caret, dragging selects, and double-clicking selects a
-word. Long values scroll horizontally to keep the caret visible. The terminal
-backend reports all of these (select-all is Ctrl-A).
-
-For password entry, mask the value while editing it normally:
-
-```go
-res := ctx.TextboxPassword(&secret)      // shows one '*' per rune
-// equivalent: ctx.TextboxEx(&secret, miniui.OptPassword)
-```
-
-The mask rune is `miniui.PasswordMask` (default `'*'`); the real value never
-reaches the draw commands.
-
-### Header (collapsible section)
-
-```go
-if ctx.Header("Advanced") != 0 { // non-zero while expanded
-	ctx.Label("only shown when the header is open")
-}
-
-// Start expanded:
-if ctx.HeaderEx("Advanced", miniui.OptExpanded) != 0 { /* ... */ }
-```
-
-### Tree node
-
-`Begin*`/`End*` controls must be balanced — only call `End*` when the matching
-`Begin*` returned non-zero:
-
-```go
-if ctx.BeginTreenode("Root") != 0 {
-	ctx.Label("child")
-	if ctx.BeginTreenode("Nested") != 0 {
-		ctx.Label("deeper")
-		ctx.EndTreenode()
-	}
-	ctx.EndTreenode()
-}
-```
-
-### Window
-
-```go
-if ctx.BeginWindow("Settings", miniui.Rect{X: 20, Y: 20, W: 300, H: 200}) != 0 {
-	ctx.Label("Hello")
-	ctx.EndWindow() // only when BeginWindow returned non-zero
-}
-```
-
-The `Rect` is the window's *initial* position and size; after that the user can
-drag the title bar to move it and the bottom-right corner to resize it, and
-miniui remembers the new geometry. Options compose with `|`:
-
-```go
-opt := miniui.OptNoTitle | miniui.OptNoResize
-ctx.BeginWindowEx("HUD", rect, opt)
-```
-
-### Panel (scrollable region)
-
-A panel is a scrollable sub-region inside a window. Give it a layout cell first
-(here a full-width, full-remaining-height cell):
-
-```go
 ctx.LayoutRow([]int{-1}, -1)
-ctx.BeginPanel("list")
-for i := 0; i < 200; i++ {
-	ctx.LayoutRow([]int{-1}, 0)
-	ctx.Label(fmt.Sprintf("row %d", i))
-}
-ctx.EndPanel()
-```
-
-### Popup / context menu
-
-```go
-if ctx.Button("Menu") != 0 {
-	ctx.OpenPopup("ctx-menu") // open it at the mouse on click
-}
-if ctx.BeginPopup("ctx-menu") != 0 { // closes itself when you click elsewhere
-	if ctx.Button("Copy") != 0 { copy() }
-	if ctx.Button("Paste") != 0 { paste() }
-	ctx.EndPopup()
-}
-```
-
----
-
-## Layout
-
-Controls are placed by a simple row system. `LayoutRow(widths, height)` starts a
-new row; each control then consumes the next cell.
-
-```go
-// A label of fixed width 80, and a field that fills the rest of the row.
-ctx.LayoutRow([]int{80, -1}, 0)
-ctx.Label("Name:")
-ctx.Textbox(&name)
-```
-
-**Width** values (per cell):
-
-| value  | meaning                                             |
-|--------|-----------------------------------------------------|
-| `> 0`  | exactly that many units wide                        |
-| `0`    | the style's default control width (`Style.Size.X`)  |
-| `< 0`  | extend to that many units from the right edge (`-1` fills to the edge) |
-
-**Height** (the second argument) works the same way: `0` = default control
-height, `> 0` = exact, `< 0` = fill to that many units from the bottom.
-
-```go
-// Three buttons, 60 wide each, 25 tall.
-ctx.LayoutRow([]int{60, 60, 60}, 25)
-ctx.Button("A"); ctx.Button("B"); ctx.Button("C")
-
-// One control filling the entire remaining width.
-ctx.LayoutRow([]int{-1}, 0)
-ctx.Button("Wide")
-
-// A single column where every control stacks full-width (the default if you
-// never call LayoutRow).
-ctx.LayoutRow([]int{-1}, 0)
-ctx.Label("line 1")
-ctx.Label("line 2")
-```
-
-**Columns** let two areas flow independently side by side:
-
-```go
-ctx.LayoutRow([]int{140, -1}, 0)
-
-ctx.LayoutBeginColumn()
-ctx.Label("left line 1")
-ctx.Label("left line 2")
-ctx.LayoutEndColumn()
-
-ctx.LayoutBeginColumn()
-ctx.Text("the right column wraps and flows on its own")
-ctx.LayoutEndColumn()
-```
-
-**Manual placement** — grab the next cell's rectangle and draw into it yourself:
-
-```go
-r := ctx.LayoutNext()
-ctx.DrawRect(r, miniui.RGBA(200, 60, 60, 255))
-```
-
----
-
-## State & control identity
-
-This is the one rule that trips people up, so it is worth understanding.
-
-miniui identifies a control by **the memory address of the variable you pass to
-it** (for value controls) or **its label** (for buttons, headers, windows).
-Two consequences:
-
-**1. Keep your state alive across frames.** A checkbox bound to `&enabled` only
-remembers its focus/hover correctly if `enabled` is the *same* variable every
-frame. Declare state as package vars, struct fields, or variables outside your
-render loop — never as fresh locals inside it.
-
-```go
-// GOOD: same address every frame
-type App struct{ enabled bool }
-func (a *App) ui(ctx *miniui.Context) { ctx.Checkbox("On", &a.enabled) }
-
-// BAD: a new variable each frame — focus/hover will misbehave
-func ui(ctx *miniui.Context) {
-	var enabled bool // re-created every call
-	ctx.Checkbox("On", &enabled)
-}
-```
-
-**2. Disambiguate repeated controls.** In a loop, many buttons may share the
-same label ("Delete"), which means the same id and broken focus. Scope each
-iteration with `PushID`/`PopID`:
-
-```go
-for i := range rows {
-	ctx.PushID([]byte(strconv.Itoa(i))) // unique scope per row
-	ctx.Label(rows[i].Name)
-	if ctx.Button("Delete") != 0 {
-		deleteRow(i)
-	}
+ctx.BeginPanel("list") // scrollable
+for i, row := range rows {
+	ctx.PushID(i) // scope repeated labels: strings, []byte or ints
+	if ctx.Button("Delete").Submitted() { del = i }
 	ctx.PopID()
 }
-```
-
-When binding to slice elements, take the element's address, not the loop copy:
-
-```go
-for i := range items {
-	ctx.Checkbox(items[i].Name, &items[i].Done) // not &item from range
-}
-```
-
----
-
-## Result flags
-
-Control functions return a bitmask. Test the bits you care about:
-
-| flag                 | meaning                                                       |
-|----------------------|---------------------------------------------------------------|
-| `miniui.ResSubmit`   | activated — button clicked, Enter pressed in a textbox        |
-| `miniui.ResChange`   | value changed this frame — checkbox, slider, number, textbox  |
-| `miniui.ResActive`   | container/section is open — window open, header/tree expanded |
-
-```go
-switch res := ctx.Textbox(&query); {
-case res&miniui.ResSubmit != 0:
-	runSearch(query)
-case res&miniui.ResChange != 0:
-	updateSuggestions(query)
-}
-```
-
-`Button` only ever returns `ResSubmit` or `0`, so `if ctx.Button(...) != 0` is
-the idiomatic check.
-
----
-
-## Reading and adjusting containers
-
-`GetCurrentContainer` returns the live state of the current window/panel, which
-you can read and even modify mid-frame:
-
-```go
-if ctx.BeginWindow("W", rect) != 0 {
-	win := ctx.GetCurrentContainer()
-	win.Rect.W = max(win.Rect.W, 200) // enforce a minimum width
-	_ = win.Scroll                    // current scroll offset (Vec2)
-	_ = win.ContentSize               // measured content size (Vec2)
-	ctx.EndWindow()
-}
-```
-
-A common trick — auto-scroll a log panel to the bottom whenever new text is
-appended:
-
-```go
-ctx.BeginPanel("log")
-panel := ctx.GetCurrentContainer()
-ctx.Text(logText)
 ctx.EndPanel()
-if appendedThisFrame {
-	panel.Scroll.Y = panel.ContentSize.Y
-}
+
+if ctx.Button("Menu").Submitted() { ctx.OpenPopup("menu") }
+if ctx.BeginPopup("menu").Active() { ...; ctx.EndPopup() }
 ```
 
----
-
-## Styling
-
-`Style` holds the colors and metrics. Copy the default and tweak it, then point
-the context at it:
-
-```go
-st := miniui.DefaultStyle()
-st.Colors[miniui.ColorButton] = miniui.RGBA(40, 90, 160, 255)
-st.Colors[miniui.ColorButtonHover] = miniui.RGBA(55, 110, 190, 255)
-st.Spacing = 8
-st.Padding = 6
-ctx.Style = &st
-```
-
-The color slots are `ColorText`, `ColorBorder`, `ColorWindowBG`, `ColorTitleBG`,
-`ColorTitleText`, `ColorPanelBG`, `ColorButton`, `ColorButtonHover`,
-`ColorButtonFocus`, `ColorBase`, `ColorBaseHover`, `ColorBaseFocus`,
-`ColorScrollBase`, `ColorScrollThumb`. Useful metrics include `Size`,
-`Padding`, `Spacing`, `Indent`, `TitleHeight`, `ScrollbarSize`, `ThumbSize`,
-`MinWidth`/`MinHeight` (smallest a window can be resized to) and `ResizeHandle`
-(size of the corner grab zone).
-
-You can also replace how control frames are drawn entirely:
-
-```go
-ctx.DrawFrame = func(c *miniui.Context, r miniui.Rect, id miniui.ColorID) {
-	c.DrawRect(r, c.Style.Colors[id]) // flat, borderless look
-}
-```
-
----
-
-## Custom controls
-
-The built-in controls are themselves built from a handful of public primitives:
-`LayoutNext` (claim a cell), `UpdateControl` (run hover/focus logic), the
-interaction accessors (`Focus`, `MousePressed`, `MouseDelta`, …) and the draw
-helpers (`DrawControlFrame`, `DrawControlText`, `DrawRect`, `DrawIcon`). A
-minimal clickable button:
-
-```go
-func myButton(ctx *miniui.Context, label string) bool {
-	id := ctx.GetID([]byte(label))
-	r := ctx.LayoutNext()
-	ctx.UpdateControl(id, r, 0)
-
-	clicked := ctx.MousePressed()&miniui.MouseLeft != 0 && ctx.Focus() == id
-
-	ctx.DrawControlFrame(id, r, miniui.ColorButton, 0)
-	ctx.DrawControlText(label, r, miniui.ColorText, miniui.OptAlignCenter)
-	return clicked
-}
-```
-
-Anything you can do with the built-ins, you can do here — drag handles
-(`MouseDelta`), value editing (`KeyPressed`, `TextboxRaw`), custom hit areas
-(`MouseOver`), and so on.
-
----
-
-## Feeding input
-
-Translate your platform's events into miniui input calls, before `Begin()`:
-
-```go
-ctx.InputMouseMove(x, y)
-ctx.InputMouseDown(x, y, miniui.MouseLeft)  // or MouseRight / MouseMiddle
-ctx.InputMouseUp(x, y, miniui.MouseLeft)
-ctx.InputScroll(0, -3)                       // wheel; +y scrolls content down
-ctx.InputText("a")                           // a typed character / string
-ctx.InputKeyDown(miniui.KeyBackspace)        // KeyShift/Ctrl/Alt/Backspace/Return,
-ctx.InputKeyUp(miniui.KeyBackspace)          // KeyLeft/Right/Home/End/Delete/SelectAll
-```
-
-For discrete key taps (Backspace, Enter), call `InputKeyDown` immediately
-followed by `InputKeyUp` — miniui consumes "pressed this frame" at `End()`.
-
----
+The one rule to remember: **value controls are identified by the address of
+the variable you pass, and labelled controls by their label.** Keep state in
+long-lived variables (struct fields), and wrap repeated labels in
+`PushID`/`PopID`. See [GUIDE §6](GUIDE.md#6-state-and-identity).
 
 ## Renderers
 
-You can consume `ctx.Commands()` directly (see [Rendering](#rendering)), but the
-[`renderer`](renderer) package wraps that loop behind a small interface
-so the *same UI code* runs on any backend — a terminal, a GPU canvas, a web
-canvas — and switching backends is switching one line.
-
-A **`Renderer`** is the surface miniui paints onto. `renderer.Paint` walks a
-frame's command list and turns each command into one method call:
+The [`renderer`](renderer) package defines a small `Renderer` interface (measure
+text, fill rects, draw text/icons, clip, present) and a `Driver` interface
+(a Renderer that also polls input), and runs the frame loop:
 
 ```go
-type Renderer interface {
-	TextWidth(font miniui.Font, str string) int
-	TextHeight(font miniui.Font) int
-	Size() (w, h int)
-
-	Clear(bg miniui.Color)    // begin a frame; reset the clip to the whole surface
-	SetClip(rect miniui.Rect) // scissor rect for the following draws
-	FillRect(rect miniui.Rect, color miniui.Color)
-	DrawText(font miniui.Font, str string, pos miniui.Vec2, color miniui.Color)
-	DrawIcon(id int, rect miniui.Rect, color miniui.Color)
-	Present()                 // flush the finished frame to the display
-}
+renderer.Run(driver, ui,
+	renderer.WithFPS(30),             // steady redraw rate; drivers also wake on input
+	renderer.WithContext(runCtx),     // cancel it to quit from the UI
+	renderer.WithSetup(func(ctx *microui.Context) { /* tweak the style */ }),
+)
 ```
 
-A **`Driver`** is a `Renderer` that can also run a live loop — it supplies the
-style and background, pumps input into the context, and tears itself down:
+| backend | where |
+|---------|-------|
+| Terminal: Unix and Windows, truecolor/256/16 colors | `renderer.NewTerminal(opts...)` |
+| Headless terminal for tests and pipes (`term.Text()` snapshots) | `renderer.NewHeadless(w, h)` |
+| Browser `<canvas>` via `syscall/js` | [`examples/wasm`](examples/wasm) |
+| SVG files (a 100-line reference Renderer) | [`examples/svg`](examples/svg) |
 
-```go
-type Driver interface {
-	Renderer
-	Style() miniui.Style
-	Background() miniui.Color
-	Poll(ctx *miniui.Context) (quit bool)
-	Close() error
-}
-```
+Swapping platforms is swapping the Driver; the UI function is unchanged.
+[GUIDE §16](GUIDE.md#16-writing-your-own-renderer) walks through writing one
+for any engine (SDL, Ebitengine, raylib, OpenGL, a framebuffer...).
 
-`renderer.Run` owns the frame loop. Your UI builder receives only a
-`*miniui.Context`, so it is completely independent of which Driver is running:
+### The terminal renderer
 
-```go
-term, err := renderer.NewTerminal() // the default backend
-if err != nil {
-	log.Fatal(err)
-}
-
-renderer.Run(term, func(ctx *miniui.Context) {
-	if ctx.BeginWindow("Hi", miniui.Rect{X: 1, Y: 1, W: 30, H: 8}) != 0 {
-		ctx.Button("OK")
-		ctx.EndWindow()
-	}
-})
-```
-
-**Swapping the engine** is swapping the Driver — `buildUI` is unchanged:
-
-```go
-drv := mygpu.New(window) // your own Driver implementation
-renderer.Run(drv, buildUI)
-```
-
-If you only want the command-list dispatch (driving your own loop), implement
-`Renderer`, call `renderer.Connect(ctx, r)` once to wire its
-`TextWidth`/`TextHeight` into the context, then call `renderer.Paint(r, ctx, bg)`
-after each `ctx.End()`.
-
-The default backend is the terminal in
-[`renderer/terminal.go`](renderer/terminal.go): each character cell is
-one "pixel", text is the terminal font, input arrives via SGR mouse reporting
-plus the keyboard, and raw mode is set with `stty(1)` — still no cgo and no
-dependencies. It is a compact reference for writing your own backend.
-
----
+* **Output:** double-buffered cell diffing, so an idle UI writes nothing; one
+  write per frame inside a synchronized update (no tearing); autowrap off;
+  alternate screen.
+* **Color:** truecolor, 256 or 16 colors, auto-detected (`COLORTERM`,
+  `TERM`, `TERM_PROGRAM`) or forced with `WithColorMode`; translucent colors
+  alpha-blend.
+* **Text:** wide CJK and emoji take two cells and layout accounts for it
+  (`renderer.StringWidth`).
+* **Input:** SGR mouse with wheel and modifiers; arrows, Home/End, PgUp/PgDn,
+  Delete, Tab/Shift-Tab, Esc; bracketed paste. Events are batched per frame,
+  so fast typing is never lost or reordered.
+* **Lifecycle:** resize handling, Ctrl-L redraw, Ctrl-Z suspend (Unix),
+  signal-safe shutdown, and a full terminal restore even if the UI panics.
 
 ## Examples
 
-The [`examples/`](examples) directory has runnable programs. Each one's UI is a
-plain `func(ctx *miniui.Context)` driven by the terminal backend, so the same UI
-would run on any other `Driver` unchanged:
+```sh
+go run ella.to/microui/examples/<name>
+```
 
 | example | what it shows |
 |---------|---------------|
-| [`boxdrag`](examples/boxdrag)     | a custom draggable box built from primitives |
 | [`textinput`](examples/textinput) | a textbox echoing what you type |
-| [`modal`](examples/modal)         | a popup/modal containing a text field |
-| [`animation`](examples/animation) | per-frame hover animation — boxes grow on hover, shrink off |
-| [`demo`](examples/demo)           | the full showcase: windows, headers, a tree, sliders that recolor the background live, and a scrolling log |
-| [`hokm`](examples/hokm)           | a playable Hokm card game — click cards to play against three AIs, drawn as a full-screen canvas game |
+| [`boxdrag`](examples/boxdrag) | a custom draggable control built from primitives |
+| [`animation`](examples/animation) | per-frame hover animation |
+| [`modal`](examples/modal) | a popup containing a text field |
+| [`demo`](examples/demo) | the classic showcase: windows, headers, tree, sliders, log |
+| [`todo`](examples/todo) | lists with `PushID`, deferred deletion, tabs, keyboard navigation |
+| [`form`](examples/form) | validation, Tab focus cycling, a true modal with a dimmed backdrop |
+| [`widgets`](examples/widgets) | copy-ready custom controls (Toggle, generic RadioGroup/Select, Tabs...) and theming |
+| [`dashboard`](examples/dashboard) | goroutine → channel → UI, sparklines and gauges, resize-aware tiling |
+| [`filebrowser`](examples/filebrowser) | recursive lazy tree over `fs.FS`, path-scoped IDs, file preview |
+| [`hokm`](examples/hokm) | a playable card game drawn on a full-screen canvas window |
+| [`svg`](examples/svg) | render a frame to an SVG file with a tiny custom Renderer |
+| [`wasm`](examples/wasm) | the same kind of UI in a browser, on `<canvas>` |
 
-```sh
-go run ella.to/microui/examples/demo
-go run ella.to/microui/examples/boxdrag
-```
-
-Drag title bars to move windows, drag the bottom-right corner to resize, use the
-mouse wheel to scroll, click controls, type into text fields, and press
-**Ctrl-C** to quit. When stdin/stdout is not a terminal each example prints a
-single frame as plain text instead, which is handy for tests.
-
----
+When stdin/stdout is not a terminal, the terminal examples print a single
+frame as plain text instead.
 
 ## Testing
 
 ```sh
 go test ./...
+go test -run '^$' -bench . -benchmem ./ ./renderer
 ```
 
----
+UIs are testable headlessly: see [GUIDE §14](GUIDE.md#14-testing-uis).
+
+## Upgrading from v0.1
+
+The package is imported by its own name (`microui`, no `miniui` alias), the
+renderer moved from `pkg/renderer` to `renderer`, results are typed
+(`.Submitted()` etc.; `!= 0` still compiles), and `Slider`/`Number`/`PushID`
+are generic. See [GUIDE §20](GUIDE.md#20-migrating-from-v01).
 
 ## License
 
