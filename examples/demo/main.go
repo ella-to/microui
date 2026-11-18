@@ -1,4 +1,4 @@
-// Command demo is the full miniui showcase: two windows exercising most of the
+// Command demo is the full microui showcase: two windows exercising most of the
 // built-in controls — headers, buttons, a popup, a tree of checkboxes, RGB
 // sliders that recolor the background live, and a scrolling log with a textbox.
 //

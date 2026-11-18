@@ -1,4 +1,4 @@
-// Command hokm is a playable, terminal Hokm card game built on miniui — a single
+// Command hokm is a playable, terminal Hokm card game built on microui — a single
 // human plays against three AIs (the one across the table is your partner, the
 // two on the sides are opponents).
 //
@@ -11,7 +11,7 @@
 // to seven tricks wins the hand (a 7–0 sweep is worth more), and the first team
 // to seven points wins the game.
 //
-// This example is a showcase of driving miniui as an immediate-mode game UI:
+// This example is a showcase of driving microui as an immediate-mode game UI:
 // it draws a full-screen canvas window and hit-tests its own colored cards with
 // MouseOver + MousePressed instead of using the built-in controls, and it paces
 // the AIs with timed delays so each trick is watchable. Click a highlighted card

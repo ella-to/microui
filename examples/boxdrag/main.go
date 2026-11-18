@@ -1,9 +1,9 @@
-// Command boxdrag is the smallest possible miniui interaction demo: a single
+// Command boxdrag is the smallest possible microui interaction demo: a single
 // box you can drag around the terminal with the mouse.
 //
 //	go run ella.to/microui/examples/boxdrag
 //
-// It shows how to build a custom, draggable control from miniui's primitives
+// It shows how to build a custom, draggable control from microui's primitives
 // (GetID, UpdateControl, the input accessors and DrawRect) inside a chrome-less
 // full-screen "canvas" window — and how the whole thing is driven by a swappable
 // renderer.Driver. Press Ctrl-C to quit.
