@@ -52,7 +52,7 @@ func TestPaintWindow(t *testing.T) {
 		c.EndWindow()
 	}
 	c.End()
-	paint(term, c, bg)
+	Draw(term, c, bg)
 	scr := term.back
 
 	wbg := c.Style.Colors[microui.ColorWindowBG]
@@ -192,7 +192,7 @@ func TestClipKeepsTextInsidePanel(t *testing.T) {
 		c.EndWindow()
 	}
 	c.End()
-	paint(term, c, microui.RGBA(0, 0, 0, 255))
+	Draw(term, c, microui.RGBA(0, 0, 0, 255))
 	scr := term.back
 	for y := range scr.h {
 		for x := 25; x < scr.w; x++ {

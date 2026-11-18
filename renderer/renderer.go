@@ -114,10 +114,10 @@ func Connect(ctx *microui.Context, r Renderer) {
 	ctx.TextHeight = r.TextHeight
 }
 
-// paint clears the surface to bg and dispatches one finished frame's draw
-// commands to r. It does not Present, so callers (and tests) can inspect the
-// surface first.
-func paint(r Renderer, ctx *microui.Context, bg microui.Color) {
+// Draw clears the surface to bg and dispatches one finished frame's draw
+// commands to r, without presenting it. Use it to inspect the surface first,
+// e.g. in tests: Draw into a NewHeadless terminal, then assert on its Text.
+func Draw(r Renderer, ctx *microui.Context, bg microui.Color) {
 	r.Clear(bg)
 	for cmd := range ctx.Commands() {
 		switch cmd.Type {
@@ -140,7 +140,7 @@ func paint(r Renderer, ctx *microui.Context, bg microui.Color) {
 // after ctx.End(). This is the bridge between microui's command list and a
 // Renderer: every draw command becomes one method call on r.
 func Paint(r Renderer, ctx *microui.Context, bg microui.Color) {
-	paint(r, ctx, bg)
+	Draw(r, ctx, bg)
 	r.Present()
 }
 
