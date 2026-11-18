@@ -1,8 +1,9 @@
 package microui
 
 import (
-	"encoding/binary"
-	"sort"
+	"cmp"
+	"reflect"
+	"slices"
 	"time"
 	"unsafe"
 )
@@ -46,9 +47,10 @@ type poolItem struct {
 	lastUpdate int
 }
 
-// Context holds all state for a miniui instance. Create one with New, set the
+// Context holds all state for a microui instance. Create one with New, set the
 // TextWidth and TextHeight callbacks, then drive it with Begin / controls / End
-// each frame.
+// each frame. A Context is not safe for concurrent use: build every frame from
+// a single goroutine.
 type Context struct {
 	// Callbacks the caller must provide. TextWidth returns the rendered width
 	// of str in the given font; TextHeight returns the line height. DrawFrame
@@ -62,10 +64,12 @@ type Context struct {
 	Style *Style
 	style Style // backing storage for the default Style
 
+	// LastRect is the rectangle of the most recently laid out control.
+	LastRect Rect
+
 	hover        ID
 	focus        ID
 	lastID       ID
-	LastRect     Rect
 	lastZIndex   int
 	updatedFocus bool
 	frame        int
@@ -96,10 +100,10 @@ type Context struct {
 	lastMousePos Vec2
 	mouseDelta   Vec2
 	scrollDelta  Vec2
-	mouseDown    int
-	mousePressed int
-	keyDown      int
-	keyPressed   int
+	mouseDown    MouseButton
+	mousePressed MouseButton
+	keyDown      Key
+	keyPressed   Key
 	inputText    string
 }
 
@@ -120,22 +124,21 @@ func defaultDrawFrame(c *Context, rect Rect, colorid ColorID) {
 		return
 	}
 	if c.Style.Colors[ColorBorder].A != 0 {
-		c.DrawBox(expandRect(rect, 1), c.Style.Colors[ColorBorder])
+		c.DrawBox(rect.Expand(1), c.Style.Colors[ColorBorder])
 	}
 }
 
 // Begin starts a new frame. TextWidth and TextHeight must be set first.
 func (c *Context) Begin() {
 	if c.TextWidth == nil || c.TextHeight == nil {
-		panic("miniui: TextWidth and TextHeight must be set before Begin")
+		panic("microui: TextWidth and TextHeight must be set before Begin")
 	}
 	c.commandList = c.commandList[:0]
 	c.rootList = c.rootList[:0]
 	c.scrollTarget = nil
 	c.hoverRoot = c.nextHoverRoot
 	c.nextHoverRoot = nil
-	c.mouseDelta.X = c.mousePos.X - c.lastMousePos.X
-	c.mouseDelta.Y = c.mousePos.Y - c.lastMousePos.Y
+	c.mouseDelta = c.mousePos.Sub(c.lastMousePos)
 	c.frame++
 }
 
@@ -143,24 +146,20 @@ func (c *Context) Begin() {
 // containers by z-index and stitches their command ranges together so that
 // Commands iterates them back-to-front.
 func (c *Context) End() {
-	// check stacks
-	if len(c.containerStack) != 0 {
-		panic("miniui: unbalanced container stack at End")
-	}
-	if len(c.clipStack) != 0 {
-		panic("miniui: unbalanced clip stack at End")
-	}
-	if len(c.idStack) != 0 {
-		panic("miniui: unbalanced id stack at End")
-	}
-	if len(c.layoutStack) != 0 {
-		panic("miniui: unbalanced layout stack at End")
+	switch {
+	case len(c.containerStack) != 0:
+		panic("microui: unbalanced container stack at End (missing EndWindow/EndPanel/EndPopup?)")
+	case len(c.clipStack) != 0:
+		panic("microui: unbalanced clip stack at End (missing PopClipRect?)")
+	case len(c.idStack) != 0:
+		panic("microui: unbalanced id stack at End (missing PopID/EndTreenode?)")
+	case len(c.layoutStack) != 0:
+		panic("microui: unbalanced layout stack at End (missing LayoutEndColumn?)")
 	}
 
 	// handle scroll input
 	if c.scrollTarget != nil {
-		c.scrollTarget.Scroll.X += c.scrollDelta.X
-		c.scrollTarget.Scroll.Y += c.scrollDelta.Y
+		c.scrollTarget.Scroll = c.scrollTarget.Scroll.Add(c.scrollDelta)
 	}
 
 	// unset focus if focus id was not touched this frame
@@ -184,30 +183,27 @@ func (c *Context) End() {
 	c.lastMousePos = c.mousePos
 
 	// sort root containers by zindex
-	n := len(c.rootList)
-	sort.SliceStable(c.rootList, func(i, j int) bool {
-		return c.rootList[i].ZIndex < c.rootList[j].ZIndex
+	slices.SortStableFunc(c.rootList, func(a, b *Container) int {
+		return cmp.Compare(a.ZIndex, b.ZIndex)
 	})
 
-	// set root container jump commands
-	for i := range n {
-		cnt := c.rootList[i]
-		// if this is the first container then make the first command jump to
-		// it. otherwise set the previous container's tail to jump to this one.
+	// set root container jump commands: the first command jumps to the
+	// back-most container, each container's tail jumps to the next one, and
+	// the front-most container's tail jumps to the end of the list.
+	for i, cnt := range c.rootList {
 		if i == 0 {
 			c.commandList[0].jump = cnt.head + 1
 		} else {
-			prev := c.rootList[i-1]
-			c.commandList[prev.tail].jump = cnt.head + 1
+			c.commandList[c.rootList[i-1].tail].jump = cnt.head + 1
 		}
-		// make the last container's tail jump to the end of the command list
-		if i == n-1 {
+		if i == len(c.rootList)-1 {
 			c.commandList[cnt.tail].jump = len(c.commandList)
 		}
 	}
 }
 
 // SetFocus sets the focused control id and marks focus as updated this frame.
+// Pass 0 to clear focus.
 func (c *Context) SetFocus(id ID) {
 	c.focus = id
 	c.updatedFocus = true
@@ -228,12 +224,11 @@ func (c *Context) Focus() ID { return c.focus }
 // Hover returns the id of the currently hovered control, or 0 if none.
 func (c *Context) Hover() ID { return c.hover }
 
-// MousePressed returns the mouse buttons pressed this frame, as a bitmask of
-// MouseLeft / MouseRight / MouseMiddle.
-func (c *Context) MousePressed() int { return c.mousePressed }
+// MousePressed returns the mouse buttons pressed this frame.
+func (c *Context) MousePressed() MouseButton { return c.mousePressed }
 
-// MouseDown returns the mouse buttons currently held, as a bitmask.
-func (c *Context) MouseDown() int { return c.mouseDown }
+// MouseDown returns the mouse buttons currently held.
+func (c *Context) MouseDown() MouseButton { return c.mouseDown }
 
 // MousePos returns the current mouse position.
 func (c *Context) MousePos() Vec2 { return c.mousePos }
@@ -241,64 +236,145 @@ func (c *Context) MousePos() Vec2 { return c.mousePos }
 // MouseDelta returns the mouse movement since the previous frame.
 func (c *Context) MouseDelta() Vec2 { return c.mouseDelta }
 
-// KeyPressed returns the keys pressed this frame, as a bitmask of
-// KeyShift / KeyCtrl / KeyAlt / KeyBackspace / KeyReturn.
-func (c *Context) KeyPressed() int { return c.keyPressed }
+// ScrollDelta returns the scroll-wheel movement accumulated this frame.
+func (c *Context) ScrollDelta() Vec2 { return c.scrollDelta }
 
-// KeyDown returns the keys currently held, as a bitmask.
-func (c *Context) KeyDown() int { return c.keyDown }
+// KeyPressed returns the keys pressed this frame.
+func (c *Context) KeyPressed() Key { return c.keyPressed }
+
+// KeyDown returns the keys currently held.
+func (c *Context) KeyDown() Key { return c.keyDown }
+
+// TextInput returns the text typed this frame (consumed by the focused
+// textbox, but readable by custom controls too).
+func (c *Context) TextInput() string { return c.inputText }
 
 // ---- id hashing -------------------------------------------------------------
 
-const hashInitial ID = 2166136261 // 32-bit FNV-1a offset basis
+const (
+	hashInitial ID = 2166136261 // 32-bit FNV-1a offset basis
+	hashPrime   ID = 16777619
+)
 
 // hashBytes folds data into h using 32-bit FNV-1a, matching microui.
 func hashBytes(h ID, data []byte) ID {
 	for _, b := range data {
-		h = (h ^ ID(b)) * 16777619
+		h = (h ^ ID(b)) * hashPrime
 	}
 	return h
 }
 
-// GetID hashes data together with the top of the id stack to produce a control
-// id, and records it as the last id.
-func (c *Context) GetID(data []byte) ID {
-	res := hashInitial
-	if n := len(c.idStack); n > 0 {
-		res = c.idStack[n-1]
+// hashString is hashBytes for a string, without converting it.
+func hashString(h ID, s string) ID {
+	for i := 0; i < len(s); i++ {
+		h = (h ^ ID(s[i])) * hashPrime
 	}
-	res = hashBytes(res, data)
-	c.lastID = res
-	return res
+	return h
+}
+
+// hashUint64 folds the 8 little-endian bytes of v into h.
+func hashUint64(h ID, v uint64) ID {
+	for range 8 {
+		h = (h ^ ID(byte(v))) * hashPrime
+		v >>= 8
+	}
+	return h
+}
+
+// hashKey hashes any IDKey into h. The common concrete types take a fast
+// path; named types (e.g. `type RowID int`) fall back to reflection.
+func hashKey[K IDKey](h ID, key K) ID {
+	switch k := any(key).(type) {
+	case string:
+		return hashString(h, k)
+	case []byte:
+		return hashBytes(h, k)
+	case int:
+		return hashUint64(h, uint64(k))
+	case int64:
+		return hashUint64(h, uint64(k))
+	case uint64:
+		return hashUint64(h, k)
+	case uint32:
+		return hashUint64(h, uint64(k))
+	case int32:
+		return hashUint64(h, uint64(k))
+	}
+	v := reflect.ValueOf(key)
+	switch v.Kind() {
+	case reflect.String:
+		return hashString(h, v.String())
+	case reflect.Slice:
+		return hashBytes(h, v.Bytes())
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return hashUint64(h, uint64(v.Int()))
+	default:
+		return hashUint64(h, v.Uint())
+	}
+}
+
+// idSeed returns the hash seed: the top of the id stack, or the FNV basis.
+func (c *Context) idSeed() ID {
+	if n := len(c.idStack); n > 0 {
+		return c.idStack[n-1]
+	}
+	return hashInitial
+}
+
+// GetID hashes key (a string, []byte or integer) together with the top of
+// the id stack to produce a control id, and records it as the last id.
+//
+//	id := ctx.GetID("my-control")
+//	id := ctx.GetID(rowIndex)
+func (c *Context) GetID[K IDKey](key K) ID {
+	c.lastID = hashKey(c.idSeed(), key)
+	return c.lastID
+}
+
+// getIDString is the non-generic string form of GetID used internally.
+func (c *Context) getIDString(s string) ID {
+	c.lastID = hashString(c.idSeed(), s)
+	return c.lastID
 }
 
 // idFromPtr derives an id from a pointer's address, matching microui's habit of
 // keying value controls by the address of the caller's variable. The variable
 // must persist across frames for retained state to remain stable.
 func (c *Context) idFromPtr(p unsafe.Pointer) ID {
-	var buf [8]byte
-	binary.LittleEndian.PutUint64(buf[:], uint64(uintptr(p)))
-	return c.GetID(buf[:])
+	c.lastID = hashUint64(c.idSeed(), uint64(uintptr(p)))
+	return c.lastID
 }
 
-// idFromInt derives an id from an int value, matching microui's id for an
+// idFromIcon derives an id from an icon value, matching microui's id for an
 // icon-only button (mu_get_id(ctx, &icon, sizeof(icon))).
-func (c *Context) idFromInt(v int) ID {
-	var buf [4]byte
-	binary.LittleEndian.PutUint32(buf[:], uint32(v))
-	return c.GetID(buf[:])
+func (c *Context) idFromIcon(icon Icon) ID {
+	h := c.idSeed()
+	v := uint32(icon)
+	for range 4 {
+		h = (h ^ ID(byte(v))) * hashPrime
+		v >>= 8
+	}
+	c.lastID = h
+	return h
 }
 
-// PushID pushes a child id (derived from data) onto the id stack so that
-// subsequent control ids are scoped beneath it.
-func (c *Context) PushID(data []byte) {
-	c.idStack = append(c.idStack, c.GetID(data))
+// PushID pushes a child scope derived from key (a string, []byte or integer)
+// onto the id stack so that subsequent control ids are scoped beneath it. Use
+// it to disambiguate controls created in a loop:
+//
+//	for i, row := range rows {
+//	    ctx.PushID(i)
+//	    if ctx.Button("Delete").Submitted() { ... }
+//	    ctx.PopID()
+//	}
+func (c *Context) PushID[K IDKey](key K) {
+	c.idStack = append(c.idStack, c.GetID(key))
 }
 
 // PopID pops the top of the id stack.
 func (c *Context) PopID() {
 	if len(c.idStack) == 0 {
-		panic("miniui: id stack underflow")
+		panic("microui: id stack underflow")
 	}
 	c.idStack = c.idStack[:len(c.idStack)-1]
 }
@@ -310,33 +386,34 @@ func (c *Context) InputMouseMove(x, y int) {
 	c.mousePos = Vec2{X: x, Y: y}
 }
 
-// InputMouseDown reports a mouse button press (a MouseLeft/Right/Middle bit).
-func (c *Context) InputMouseDown(x, y, btn int) {
+// InputMouseDown reports a mouse button press.
+func (c *Context) InputMouseDown(x, y int, btn MouseButton) {
 	c.InputMouseMove(x, y)
 	c.mouseDown |= btn
 	c.mousePressed |= btn
 }
 
 // InputMouseUp reports a mouse button release.
-func (c *Context) InputMouseUp(x, y, btn int) {
+func (c *Context) InputMouseUp(x, y int, btn MouseButton) {
 	c.InputMouseMove(x, y)
 	c.mouseDown &^= btn
 }
 
 // InputScroll reports a scroll-wheel delta (accumulated within the frame).
+// Positive y scrolls content down.
 func (c *Context) InputScroll(x, y int) {
-	c.scrollDelta.X += x
-	c.scrollDelta.Y += y
+	c.scrollDelta = c.scrollDelta.Add(Vec2{X: x, Y: y})
 }
 
-// InputKeyDown reports a key press (a KeyShift/Ctrl/Alt/Backspace/Return bit).
-func (c *Context) InputKeyDown(key int) {
+// InputKeyDown reports a key press. For a discrete tap, follow it with
+// InputKeyUp before the frame: the press is still seen via KeyPressed.
+func (c *Context) InputKeyDown(key Key) {
 	c.keyPressed |= key
 	c.keyDown |= key
 }
 
 // InputKeyUp reports a key release.
-func (c *Context) InputKeyUp(key int) {
+func (c *Context) InputKeyUp(key Key) {
 	c.keyDown &^= key
 }
 
@@ -351,7 +428,7 @@ func (c *Context) InputText(text string) {
 // GetCurrentContainer returns the innermost open container.
 func (c *Context) GetCurrentContainer() *Container {
 	if len(c.containerStack) == 0 {
-		panic("miniui: no current container")
+		panic("microui: no current container (call inside BeginWindow/BeginPanel)")
 	}
 	return c.containerStack[len(c.containerStack)-1]
 }
@@ -380,8 +457,7 @@ func (c *Context) getContainer(id ID, opt Option) *Container {
 // GetContainer returns the retained container associated with name, creating it
 // if necessary.
 func (c *Context) GetContainer(name string) *Container {
-	id := c.GetID([]byte(name))
-	return c.getContainer(id, 0)
+	return c.getContainer(c.getIDString(name), 0)
 }
 
 // BringToFront raises cnt above all other containers by giving it the highest
@@ -404,7 +480,7 @@ func (c *Context) poolInit(items []poolItem, id ID) int {
 		}
 	}
 	if n < 0 {
-		panic("miniui: pool exhausted")
+		panic("microui: retained-state pool exhausted (too many live windows/panels/tree nodes)")
 	}
 	items[n].id = id
 	c.poolUpdate(items, n)

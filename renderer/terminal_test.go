@@ -4,12 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	miniui "ella.to/microui"
+	"ella.to/microui"
 )
 
 // testCtx returns a context wired to a headless terminal renderer.
-func testCtx(t *Terminal) *miniui.Context {
-	c := miniui.New()
+func testCtx(t *Terminal) *microui.Context {
+	c := microui.New()
 	Connect(c, t)
 	st := t.Style()
 	c.Style = &st
@@ -29,10 +29,10 @@ func findRune(s *screen, r rune) bool {
 func TestPaintWindow(t *testing.T) {
 	term := NewHeadless(40, 12)
 	c := testCtx(term)
-	bg := miniui.RGBA(0, 0, 0, 255)
+	bg := microui.RGBA(0, 0, 0, 255)
 
 	c.Begin()
-	if c.BeginWindow("Hi", miniui.Rect{X: 2, Y: 1, W: 20, H: 8}) != 0 {
+	if c.BeginWindow("Hi", microui.Rect{X: 2, Y: 1, W: 20, H: 8}) != 0 {
 		c.LayoutRow([]int{-1}, 0)
 		c.Button("Go")
 		c.EndWindow()
@@ -42,7 +42,7 @@ func TestPaintWindow(t *testing.T) {
 	scr := term.scr
 
 	// The window background color should appear somewhere (distinct from bg).
-	wbg := c.Style.Colors[miniui.ColorWindowBG]
+	wbg := c.Style.Colors[microui.ColorWindowBG]
 	foundWBG := false
 	for i := range scr.cells {
 		if scr.cells[i].bg == wbg {
@@ -62,7 +62,7 @@ func TestPaintWindow(t *testing.T) {
 	}
 
 	// The close icon should be drawn.
-	if !findRune(scr, iconGlyph(miniui.IconClose)) {
+	if !findRune(scr, iconGlyph(microui.IconClose)) {
 		t.Errorf("close icon glyph not found")
 	}
 }
@@ -71,11 +71,11 @@ func TestRenderANSINonEmpty(t *testing.T) {
 	term := NewHeadless(30, 6)
 	c := testCtx(term)
 	c.Begin()
-	if c.BeginWindow("W", miniui.Rect{X: 0, Y: 0, W: 16, H: 5}) != 0 {
+	if c.BeginWindow("W", microui.Rect{X: 0, Y: 0, W: 16, H: 5}) != 0 {
 		c.EndWindow()
 	}
 	c.End()
-	paint(term, c, miniui.RGBA(0, 0, 0, 255))
+	paint(term, c, microui.RGBA(0, 0, 0, 255))
 
 	out := renderANSI(term.scr, true)
 	if !strings.Contains(out, "\x1b[48;2;") {
@@ -99,16 +99,16 @@ func TestRenderANSINonEmpty(t *testing.T) {
 
 func TestAnsi256(t *testing.T) {
 	cases := []struct {
-		c    miniui.Color
+		c    microui.Color
 		want int
 	}{
-		{miniui.RGBA(0, 0, 0, 255), 16},        // cube black
-		{miniui.RGBA(255, 255, 255, 255), 231}, // cube white
-		{miniui.RGBA(255, 0, 0, 255), 196},     // pure red
-		{miniui.RGBA(0, 255, 0, 255), 46},      // pure green
-		{miniui.RGBA(0, 0, 255, 255), 21},      // pure blue
-		{miniui.RGBA(8, 8, 8, 255), 232},       // darkest gray ramp entry
-		{miniui.RGBA(128, 128, 128, 255), 244}, // mid gray -> ramp, not cube
+		{microui.RGBA(0, 0, 0, 255), 16},        // cube black
+		{microui.RGBA(255, 255, 255, 255), 231}, // cube white
+		{microui.RGBA(255, 0, 0, 255), 196},     // pure red
+		{microui.RGBA(0, 255, 0, 255), 46},      // pure green
+		{microui.RGBA(0, 0, 255, 255), 21},      // pure blue
+		{microui.RGBA(8, 8, 8, 255), 232},       // darkest gray ramp entry
+		{microui.RGBA(128, 128, 128, 255), 244}, // mid gray -> ramp, not cube
 	}
 	for _, tc := range cases {
 		if got := ansi256(tc.c); got != tc.want {
@@ -124,13 +124,13 @@ func TestClipKeepsTextInsidePanel(t *testing.T) {
 	term := NewHeadless(50, 16)
 	c := testCtx(term)
 	c.Begin()
-	if c.BeginWindowEx("L", miniui.Rect{X: 0, Y: 0, W: 20, H: 12}, miniui.OptNoTitle) != 0 {
+	if c.BeginWindowEx("L", microui.Rect{X: 0, Y: 0, W: 20, H: 12}, microui.OptNoTitle) != 0 {
 		c.LayoutRow([]int{-1}, -1)
 		c.Text(strings.Repeat("word ", 200))
 		c.EndWindow()
 	}
 	c.End()
-	paint(term, c, miniui.RGBA(0, 0, 0, 255))
+	paint(term, c, microui.RGBA(0, 0, 0, 255))
 	scr := term.scr
 
 	// No cell outside the window's right edge (plus border) should contain a

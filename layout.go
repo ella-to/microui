@@ -67,7 +67,7 @@ func (c *Context) layoutRow(items int, widths []int, height int) {
 	l := c.getLayout()
 	if widths != nil {
 		if items > maxWidths {
-			panic("miniui: too many layout widths")
+			panic("microui: too many layout widths (max 16 per row)")
 		}
 		copy(l.widths[:items], widths[:items])
 	}

@@ -4,16 +4,16 @@ import (
 	"strconv"
 	"strings"
 
-	miniui "ella.to/microui"
+	"ella.to/microui"
 )
 
 // This file decodes terminal input bytes (keyboard + SGR mouse reports) into
-// miniui input events.
+// microui input events.
 
 // parseInput consumes as many complete input tokens from buf as possible,
 // feeding them to ctx, and returns the number of bytes consumed. Any trailing
 // incomplete escape sequence is left for the next call. It sets *quit on Ctrl-C.
-func parseInput(ctx *miniui.Context, buf []byte, quit *bool) int {
+func parseInput(ctx *microui.Context, buf []byte, quit *bool) int {
 	i := 0
 	for i < len(buf) {
 		c := buf[i]
@@ -30,18 +30,18 @@ func parseInput(ctx *miniui.Context, buf []byte, quit *bool) int {
 			i++
 
 		case c == 0x01: // Ctrl-A: select all in a focused textbox
-			ctx.InputKeyDown(miniui.KeySelectAll)
-			ctx.InputKeyUp(miniui.KeySelectAll)
+			ctx.InputKeyDown(microui.KeySelectAll)
+			ctx.InputKeyUp(microui.KeySelectAll)
 			i++
 
 		case c == '\r' || c == '\n': // Enter
-			ctx.InputKeyDown(miniui.KeyReturn)
-			ctx.InputKeyUp(miniui.KeyReturn)
+			ctx.InputKeyDown(microui.KeyReturn)
+			ctx.InputKeyUp(microui.KeyReturn)
 			i++
 
 		case c == 0x7f || c == 0x08: // Backspace / Delete
-			ctx.InputKeyDown(miniui.KeyBackspace)
-			ctx.InputKeyUp(miniui.KeyBackspace)
+			ctx.InputKeyDown(microui.KeyBackspace)
+			ctx.InputKeyUp(microui.KeyBackspace)
 			i++
 
 		case c >= 0x20: // printable text (including UTF-8 multibyte runs)
@@ -61,7 +61,7 @@ func parseInput(ctx *miniui.Context, buf []byte, quit *bool) int {
 
 // parseEscape parses a single escape sequence at the start of buf. It returns
 // the number of bytes consumed and whether a complete sequence was found.
-func parseEscape(ctx *miniui.Context, buf []byte) (int, bool) {
+func parseEscape(ctx *microui.Context, buf []byte) (int, bool) {
 	if len(buf) < 2 {
 		return 0, false
 	}
@@ -99,17 +99,17 @@ func parseEscape(ctx *miniui.Context, buf []byte) (int, bool) {
 // modifier parameters ("1;2"=Shift, "1;5"=Ctrl, "1;6"=both). Terminals report
 // no key releases, so modifiers are synthesized down around the key and up
 // again; the textbox reads them from keyPressed as well as keyDown.
-func parseCSIKey(ctx *miniui.Context, params string, final byte) {
-	key := 0
+func parseCSIKey(ctx *microui.Context, params string, final byte) {
+	var key microui.Key
 	switch final {
 	case 'C':
-		key = miniui.KeyRight
+		key = microui.KeyRight
 	case 'D':
-		key = miniui.KeyLeft
+		key = microui.KeyLeft
 	case 'H':
-		key = miniui.KeyHome
+		key = microui.KeyHome
 	case 'F':
-		key = miniui.KeyEnd
+		key = microui.KeyEnd
 	case '~': // legacy "CSI n ~" keys
 		num := params
 		if i := strings.IndexByte(num, ';'); i >= 0 {
@@ -117,29 +117,29 @@ func parseCSIKey(ctx *miniui.Context, params string, final byte) {
 		}
 		switch num {
 		case "1", "7":
-			key = miniui.KeyHome
+			key = microui.KeyHome
 		case "3":
-			key = miniui.KeyDelete
+			key = microui.KeyDelete
 		case "4", "8":
-			key = miniui.KeyEnd
+			key = microui.KeyEnd
 		}
 	}
 	if key == 0 {
 		return // unhandled sequence (function keys, arrows up/down, ...)
 	}
 
-	mods := 0
+	var mods microui.Key
 	if i := strings.IndexByte(params, ';'); i >= 0 {
 		if m, err := strconv.Atoi(params[i+1:]); err == nil {
 			m-- // xterm encodes the modifier bitmask plus one
 			if m&1 != 0 {
-				mods |= miniui.KeyShift
+				mods |= microui.KeyShift
 			}
 			if m&2 != 0 {
-				mods |= miniui.KeyAlt
+				mods |= microui.KeyAlt
 			}
 			if m&4 != 0 {
-				mods |= miniui.KeyCtrl
+				mods |= microui.KeyCtrl
 			}
 		}
 	}
@@ -154,7 +154,7 @@ func parseCSIKey(ctx *miniui.Context, params string, final byte) {
 }
 
 // parseMouse decodes an SGR mouse report ("cb;cx;cy") and feeds it to ctx.
-func parseMouse(ctx *miniui.Context, params string, press bool) {
+func parseMouse(ctx *microui.Context, params string, press bool) {
 	cb, cx, cy, ok := threeInts(params)
 	if !ok {
 		return
@@ -172,14 +172,14 @@ func parseMouse(ctx *miniui.Context, params string, press bool) {
 	case cb&32 != 0: // motion (with or without a button held)
 		ctx.InputMouseMove(x, y)
 	default: // button press / release
-		btn := 0
+		var btn microui.MouseButton
 		switch cb & 3 {
 		case 0:
-			btn = miniui.MouseLeft
+			btn = microui.MouseLeft
 		case 1:
-			btn = miniui.MouseMiddle
+			btn = microui.MouseMiddle
 		case 2:
-			btn = miniui.MouseRight
+			btn = microui.MouseRight
 		}
 		if btn == 0 {
 			return

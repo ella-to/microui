@@ -20,7 +20,7 @@ func benchUI(c *Context, s *benchState) {
 		if c.HeaderEx("Buttons", OptExpanded) != 0 {
 			c.LayoutRow([]int{12, 12, 12, -1}, 0)
 			for i := range 16 {
-				c.PushID([]byte(strconv.Itoa(i)))
+				c.PushID(i)
 				c.Button("Button")
 				c.PopID()
 			}

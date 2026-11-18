@@ -30,7 +30,7 @@ func newTextboxFixture(buf *string) (*Context, func()) {
 }
 
 // pressKey feeds one key press (down for a frame, then up).
-func pressKey(c *Context, ui func(), keys ...int) {
+func pressKey(c *Context, ui func(), keys ...Key) {
 	for _, k := range keys {
 		c.InputKeyDown(k)
 	}

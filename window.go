@@ -16,7 +16,7 @@ func (c *Context) popContainer() {
 func (c *Context) scrollbarV(cnt *Container, b *Rect, cs Vec2) {
 	maxscroll := cs.Y - b.H
 	if maxscroll > 0 && b.H > 0 {
-		id := c.GetID([]byte("!scrollbary"))
+		id := c.getIDString("!scrollbary")
 		base := *b
 		base.X = b.X + b.W
 		base.W = c.Style.ScrollbarSize
@@ -46,7 +46,7 @@ func (c *Context) scrollbarV(cnt *Container, b *Rect, cs Vec2) {
 func (c *Context) scrollbarH(cnt *Container, b *Rect, cs Vec2) {
 	maxscroll := cs.X - b.W
 	if maxscroll > 0 && b.W > 0 {
-		id := c.GetID([]byte("!scrollbarx"))
+		id := c.getIDString("!scrollbarx")
 		base := *b
 		base.Y = b.Y + b.H
 		base.H = c.Style.ScrollbarSize
@@ -96,7 +96,7 @@ func (c *Context) pushContainerBody(cnt *Container, body Rect, opt Option) {
 	if !opt.has(OptNoScroll) {
 		c.scrollbars(cnt, &body)
 	}
-	c.pushLayout(expandRect(body, -c.Style.Padding), cnt.Scroll)
+	c.pushLayout(body.Expand(-c.Style.Padding), cnt.Scroll)
 	cnt.Body = body
 }
 
@@ -109,7 +109,7 @@ func (c *Context) beginRootContainer(cnt *Container) {
 	cnt.head = c.pushJump(-1)
 	// set as hover root if the mouse is overlapping this container and it has a
 	// higher zindex than the current hover root
-	if rectOverlapsVec2(cnt.Rect, c.mousePos) &&
+	if cnt.Rect.Contains(c.mousePos) &&
 		(c.nextHoverRoot == nil || cnt.ZIndex > c.nextHoverRoot.ZIndex) {
 		c.nextHoverRoot = cnt
 	}
@@ -127,16 +127,23 @@ func (c *Context) endRootContainer() {
 	c.popContainer()
 }
 
-// BeginWindow begins a window with default options. If it returns non-zero,
-// emit controls and then call EndWindow.
-func (c *Context) BeginWindow(title string, rect Rect) int {
+// BeginWindow begins a window with default options. If the result is Active,
+// emit controls and then call EndWindow:
+//
+//	if ctx.BeginWindow("Settings", rect).Active() {
+//	    ...
+//	    ctx.EndWindow()
+//	}
+func (c *Context) BeginWindow(title string, rect Rect) Result {
 	return c.BeginWindowEx(title, rect, 0)
 }
 
 // BeginWindowEx begins a window with options. rect is the initial window
-// rectangle, used only the first time the window appears.
-func (c *Context) BeginWindowEx(title string, rect Rect, opt Option) int {
-	id := c.GetID([]byte(title))
+// rectangle, used only the first time the window appears; afterwards the
+// retained geometry (moved/resized by the user) wins. The title doubles as the
+// window's identity, so two windows must not share a title.
+func (c *Context) BeginWindowEx(title string, rect Rect, opt Option) Result {
+	id := c.getIDString(title)
 	cnt := c.getContainer(id, opt)
 	if cnt == nil || !cnt.Open {
 		return 0
@@ -162,7 +169,7 @@ func (c *Context) BeginWindowEx(title string, rect Rect, opt Option) int {
 		c.DrawFrame(c, tr, ColorTitleBG)
 
 		// do title text
-		tid := c.GetID([]byte("!title"))
+		tid := c.getIDString("!title")
 		c.UpdateControl(tid, tr, opt)
 		c.DrawControlText(title, tr, ColorTitleText, opt)
 		if tid == c.focus && c.mouseDown == MouseLeft {
@@ -174,7 +181,7 @@ func (c *Context) BeginWindowEx(title string, rect Rect, opt Option) int {
 
 		// do `close` button
 		if !opt.has(OptNoClose) {
-			clid := c.GetID([]byte("!close"))
+			clid := c.getIDString("!close")
 			r := Rect{X: tr.X + tr.W - tr.H, Y: tr.Y, W: tr.H, H: tr.H}
 			tr.W -= r.W
 			c.DrawIcon(IconClose, r, c.Style.Colors[ColorTitleText])
@@ -193,7 +200,7 @@ func (c *Context) BeginWindowEx(title string, rect Rect, opt Option) int {
 		if sz <= 0 {
 			sz = c.Style.TitleHeight // microui default: handle == title height
 		}
-		rid := c.GetID([]byte("!resize"))
+		rid := c.getIDString("!resize")
 		r := Rect{X: rect.X + rect.W - sz, Y: rect.Y + rect.H - sz, W: sz, H: sz}
 		c.UpdateControl(rid, r, opt)
 		if rid == c.focus && c.mouseDown == MouseLeft {
@@ -236,11 +243,18 @@ func (c *Context) OpenPopup(name string) {
 	c.BringToFront(cnt)
 }
 
-// BeginPopup begins a popup window opened with OpenPopup. If it returns
-// non-zero, emit controls and call EndPopup.
-func (c *Context) BeginPopup(name string) int {
+// BeginPopup begins a popup window opened with OpenPopup. If the result is
+// Active, emit controls and call EndPopup. A popup closes itself when the
+// user clicks outside it; call ClosePopup to close it explicitly.
+func (c *Context) BeginPopup(name string) Result {
 	opt := OptPopup | OptAutoSize | OptNoResize | OptNoScroll | OptNoTitle | OptClosed
 	return c.BeginWindowEx(name, Rect{}, opt)
+}
+
+// ClosePopup closes the popup (or window) named name. It takes effect from
+// the next frame, so it is safe to call between BeginPopup and EndPopup.
+func (c *Context) ClosePopup(name string) {
+	c.GetContainer(name).Open = false
 }
 
 // EndPopup ends a popup begun with BeginPopup.
@@ -255,7 +269,7 @@ func (c *Context) BeginPanel(name string) {
 
 // BeginPanelEx begins a panel with options. Always pair with EndPanel.
 func (c *Context) BeginPanelEx(name string, opt Option) {
-	c.PushID([]byte(name))
+	c.PushID(name)
 	cnt := c.getContainer(c.lastID, opt)
 	cnt.Rect = c.LayoutNext()
 	if !opt.has(OptNoFrame) {

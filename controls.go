@@ -2,6 +2,7 @@ package microui
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 const (
 	realFmt   = "%.3g"
 	sliderFmt = "%.2f"
+	intFmt    = "%d"
 )
 
 // ---- control helpers --------------------------------------------------------
@@ -35,7 +37,8 @@ func (c *Context) inHoverRoot() bool {
 }
 
 // DrawControlFrame draws a control's background frame, shifting the color id for
-// hover/focus state unless OptNoFrame is set.
+// hover/focus state unless OptNoFrame is set. colorid must be one of the base
+// slots that has Hover/Focus variants after it (ColorButton, ColorBase).
 func (c *Context) DrawControlFrame(id ID, rect Rect, colorid ColorID, opt Option) {
 	if opt.has(OptNoFrame) {
 		return
@@ -71,13 +74,14 @@ func (c *Context) DrawControlText(str string, rect Rect, colorid ColorID, opt Op
 // MouseOver reports whether the mouse is over rect, within the clip rectangle,
 // and inside the hovered root container.
 func (c *Context) MouseOver(rect Rect) bool {
-	return rectOverlapsVec2(rect, c.mousePos) &&
-		rectOverlapsVec2(c.GetClipRect(), c.mousePos) &&
+	return rect.Contains(c.mousePos) &&
+		c.GetClipRect().Contains(c.mousePos) &&
 		c.inHoverRoot()
 }
 
 // UpdateControl updates hover/focus state for the control identified by id
-// occupying rect.
+// occupying rect. Call it once per frame for every custom control, before
+// reading Hover/Focus for that control.
 func (c *Context) UpdateControl(id ID, rect Rect, opt Option) {
 	mouseover := c.MouseOver(rect)
 
@@ -109,61 +113,57 @@ func (c *Context) UpdateControl(id ID, rect Rect, opt Option) {
 	}
 }
 
+// clicked reports whether id was clicked with the left button this frame.
+func (c *Context) clicked(id ID) bool {
+	return c.mousePressed == MouseLeft && c.focus == id
+}
+
 // ---- controls ---------------------------------------------------------------
 
-// charAt returns the byte at index i, or 0 if i is out of range (mirroring a
-// C NUL-terminated string).
-func charAt(s string, i int) byte {
-	if i < len(s) {
-		return s[i]
-	}
-	return 0
-}
-
-// chSlice returns the single-byte substring at i, or "" at the end of s.
-func chSlice(s string, i int) string {
-	if i < len(s) {
-		return s[i : i+1]
-	}
-	return ""
-}
-
-// Text draws word-wrapped text within the current layout column.
+// Text draws word-wrapped text within the current layout column. Explicit
+// newlines start a new line.
 func (c *Context) Text(text string) {
 	font := c.Style.Font
 	color := c.Style.Colors[ColorText]
 	c.LayoutBeginColumn()
 	c.layoutRow(1, []int{-1}, c.TextHeight(font))
-	s := text
-	p := 0
-	for {
-		r := c.LayoutNext()
-		w := 0
-		start := p
-		end := p
-		for {
-			word := p
-			for charAt(s, p) != 0 && charAt(s, p) != ' ' && charAt(s, p) != '\n' {
-				p++
-			}
-			w += c.TextWidth(font, s[word:p])
-			if w > r.W && end != start {
-				break
-			}
-			w += c.TextWidth(font, chSlice(s, p))
-			end = p
-			p++
-			if charAt(s, end) == 0 || charAt(s, end) == '\n' {
-				break
-			}
-		}
-		c.DrawText(font, s[start:end], Vec2{X: r.X, Y: r.Y}, color)
-		p = end + 1
-		if charAt(s, end) == 0 {
-			break
-		}
+	for line := range strings.SplitSeq(text, "\n") {
+		c.wrapLine(font, line, color)
 	}
 	c.LayoutEndColumn()
+}
+
+// wrapLine lays out one newline-free line, breaking at spaces so each row fits
+// the column width. A single word wider than the column gets its own row.
+func (c *Context) wrapLine(font Font, line string, color Color) {
+	r := c.LayoutNext()
+	start, end, w := 0, 0, 0 // current row is line[start:end], w wide
+	spaceW := c.TextWidth(font, " ")
+	p := 0
+	for {
+		// find the next word line[p:q]
+		q := p
+		for q < len(line) && line[q] != ' ' {
+			q++
+		}
+		ww := c.TextWidth(font, line[p:q])
+		if end > start && w+ww > r.W {
+			// the word does not fit: flush the row and start a new one at it
+			c.DrawText(font, line[start:end], Vec2{X: r.X, Y: r.Y}, color)
+			r = c.LayoutNext()
+			start, w = p, 0
+		}
+		w += ww
+		end = q
+		if q >= len(line) {
+			break
+		}
+		w += spaceW
+		p = q + 1
+	}
+	if end > start {
+		c.DrawText(font, line[start:end], Vec2{X: r.X, Y: r.Y}, color)
+	}
 }
 
 // Label draws a single-line, left-aligned text label in the next layout cell.
@@ -171,28 +171,27 @@ func (c *Context) Label(text string) {
 	c.DrawControlText(text, c.LayoutNext(), ColorText, 0)
 }
 
-// Button draws a clickable, center-aligned button. It returns ResSubmit on the
-// frame it is clicked.
-func (c *Context) Button(label string) int {
+// Button draws a clickable, center-aligned button. The result is Submitted
+// on the frame it is clicked. The label doubles as the button's identity:
+// scope repeated labels with PushID.
+func (c *Context) Button(label string) Result {
 	return c.ButtonEx(label, 0, OptAlignCenter)
 }
 
 // ButtonEx draws a button with an optional icon and options.
-func (c *Context) ButtonEx(label string, icon int, opt Option) int {
-	res := 0
+func (c *Context) ButtonEx(label string, icon Icon, opt Option) Result {
+	var res Result
 	var id ID
 	if label != "" {
-		id = c.GetID([]byte(label))
+		id = c.getIDString(label)
 	} else {
-		id = c.idFromInt(icon)
+		id = c.idFromIcon(icon)
 	}
 	r := c.LayoutNext()
 	c.UpdateControl(id, r, opt)
-	// handle click
-	if c.mousePressed == MouseLeft && c.focus == id {
+	if c.clicked(id) {
 		res |= ResSubmit
 	}
-	// draw
 	c.DrawControlFrame(id, r, ColorButton, opt)
 	if label != "" {
 		c.DrawControlText(label, r, ColorText, opt)
@@ -203,20 +202,19 @@ func (c *Context) ButtonEx(label string, icon int, opt Option) int {
 	return res
 }
 
-// Checkbox draws a labelled checkbox bound to state. It returns ResChange on
-// the frame its value toggles.
-func (c *Context) Checkbox(label string, state *bool) int {
-	res := 0
+// Checkbox draws a labelled checkbox bound to state. The result is Changed on
+// the frame its value toggles. state must persist across frames: its address
+// is the control's identity.
+func (c *Context) Checkbox(label string, state *bool) Result {
+	var res Result
 	id := c.idFromPtr(unsafe.Pointer(state))
 	r := c.LayoutNext()
 	box := Rect{X: r.X, Y: r.Y, W: r.H, H: r.H}
 	c.UpdateControl(id, r, 0)
-	// handle click
-	if c.mousePressed == MouseLeft && c.focus == id {
+	if c.clicked(id) {
 		res |= ResChange
 		*state = !*state
 	}
-	// draw
 	c.DrawControlFrame(id, box, ColorBase, 0)
 	if *state {
 		c.DrawIcon(IconCheck, box, c.Style.Colors[ColorText])
@@ -225,6 +223,8 @@ func (c *Context) Checkbox(label string, state *bool) int {
 	c.DrawControlText(label, r, ColorText, 0)
 	return res
 }
+
+// ---- textbox ------------------------------------------------------------------
 
 // now is the textbox's clock, indirect so tests can control double-click
 // timing.
@@ -246,17 +246,29 @@ func (e *textEdit) clampTo(n int) {
 	e.anchor = clampI(e.anchor, 0, n)
 }
 
-// replaceSel replaces the selected range (or splices at the caret when
-// nothing is selected) with ins, leaving the caret after the insertion.
-func (e *textEdit) replaceSel(runes, ins []rune) []rune {
+// replaceSel replaces the selected rune range of s (or splices at the caret
+// when nothing is selected) with ins, leaving the caret after the insertion.
+func (e *textEdit) replaceSel(s, ins string) string {
 	lo, hi := e.selMin(), e.selMax()
-	out := make([]rune, 0, len(runes)-(hi-lo)+len(ins))
-	out = append(out, runes[:lo]...)
-	out = append(out, ins...)
-	out = append(out, runes[hi:]...)
-	e.cursor = lo + len(ins)
+	out := s[:runeOffset(s, lo)] + ins + s[runeOffset(s, hi):]
+	e.cursor = lo + utf8.RuneCountInString(ins)
 	e.anchor = e.cursor
 	return out
+}
+
+// runeOffset returns the byte offset of the i-th rune of s (len(s) when i is
+// past the end). Slicing a string at it does not allocate.
+func runeOffset(s string, i int) int {
+	if i <= 0 {
+		return 0
+	}
+	for bi := range s {
+		if i == 0 {
+			return bi
+		}
+		i--
+	}
+	return len(s)
 }
 
 // textDisplay returns what a textbox draws: the value itself, or one
@@ -271,29 +283,34 @@ func textDisplay(s string, opt Option) string {
 
 // textIndexAt returns the rune index in disp whose caret position is nearest
 // to x, given the text's left edge textx.
-func (c *Context) textIndexAt(disp []rune, font Font, textx, x int) int {
-	best, bestDist := 0, int(^uint(0)>>1)
-	for i := 0; i <= len(disp); i++ {
-		d := textx + c.TextWidth(font, string(disp[:i])) - x
+func (c *Context) textIndexAt(disp string, font Font, textx, x int) int {
+	best, bestDist := 0, math.MaxInt
+	i := 0
+	check := func(prefix string) {
+		d := textx + c.TextWidth(font, prefix) - x
 		if d < 0 {
 			d = -d
 		}
 		if d < bestDist {
 			best, bestDist = i, d
 		}
+		i++
 	}
+	for bi := range disp {
+		check(disp[:bi])
+	}
+	check(disp)
 	return best
 }
 
-// wordBoundsAt returns the boundaries of the word containing index i: a run
-// of non-space runes, or the run of spaces i falls in.
-func wordBoundsAt(disp []rune, i int) (lo, hi int) {
+// wordBoundsAt returns the rune boundaries of the word containing rune index
+// i: a run of non-space runes, or the run of spaces i falls in.
+func wordBoundsAt(s string, i int) (lo, hi int) {
+	disp := []rune(s)
 	if len(disp) == 0 {
 		return 0, 0
 	}
-	if i >= len(disp) {
-		i = len(disp) - 1
-	}
+	i = min(i, len(disp)-1)
 	space := unicode.IsSpace(disp[i])
 	lo, hi = i, i+1
 	for lo > 0 && unicode.IsSpace(disp[lo-1]) == space {
@@ -305,8 +322,9 @@ func wordBoundsAt(disp []rune, i int) (lo, hi int) {
 	return lo, hi
 }
 
-// TextboxRaw is the low-level text box: it edits buf for the control id at rect.
-// Unlike microui there is no fixed buffer size; the string grows as typed.
+// TextboxRaw is the low-level text box: it edits buf for the control id at
+// rect r. Unlike microui there is no fixed buffer size; the string grows as
+// typed.
 //
 // While focused it supports full caret editing: arrows (with Shift extending
 // the selection and Ctrl jumping to the ends), Home/End, Delete/Backspace,
@@ -314,22 +332,23 @@ func wordBoundsAt(disp []rune, i int) (lo, hi int) {
 // select a word. Long values scroll horizontally to keep the caret visible.
 // Backends that only report the classic key bits keep the old append/erase
 // behavior, since the caret then simply stays at the end.
-func (c *Context) TextboxRaw(buf *string, id ID, r Rect, opt Option) int {
-	res := 0
+func (c *Context) TextboxRaw(buf *string, id ID, r Rect, opt Option) Result {
+	var res Result
 	c.UpdateControl(id, r, opt|OptHoldFocus)
 
 	font := c.Style.Font
 	ed := &c.textEdit
 
 	if c.focus == id {
-		runes := []rune(*buf)
+		s := *buf
+		n := utf8.RuneCountInString(s)
 		if ed.id != id {
 			// gaining focus: caret at the end, nothing selected
-			*ed = textEdit{id: id, cursor: len(runes), anchor: len(runes)}
+			*ed = textEdit{id: id, cursor: n, anchor: n}
 		}
-		ed.clampTo(len(runes))
+		ed.clampTo(n)
 
-		disp := []rune(textDisplay(*buf, opt))
+		disp := textDisplay(s, opt)
 		textx := r.X + c.Style.Padding - ed.scroll
 
 		// mouse: click to place the caret, drag to select, double-click for
@@ -367,7 +386,7 @@ func (c *Context) TextboxRaw(buf *string, id ID, r Rect, opt Option) int {
 		// moveTo places the caret, extending the selection while Shift is
 		// held and collapsing it otherwise.
 		moveTo := func(i int) {
-			ed.cursor = clampI(i, 0, len(runes))
+			ed.cursor = clampI(i, 0, n)
 			if !shift {
 				ed.anchor = ed.cursor
 			}
@@ -386,7 +405,7 @@ func (c *Context) TextboxRaw(buf *string, id ID, r Rect, opt Option) int {
 		case k&KeyRight != 0:
 			switch {
 			case ctrl:
-				moveTo(len(runes))
+				moveTo(n)
 			case ed.hasSel() && !shift:
 				ed.cursor = ed.selMax()
 				ed.anchor = ed.cursor
@@ -396,15 +415,16 @@ func (c *Context) TextboxRaw(buf *string, id ID, r Rect, opt Option) int {
 		case k&KeyHome != 0:
 			moveTo(0)
 		case k&KeyEnd != 0:
-			moveTo(len(runes))
+			moveTo(n)
 		}
 		if k&KeySelectAll != 0 {
-			ed.anchor, ed.cursor = 0, len(runes)
+			ed.anchor, ed.cursor = 0, n
 		}
 
 		// handle text input
 		if c.inputText != "" {
-			runes = ed.replaceSel(runes, []rune(c.inputText))
+			s = ed.replaceSel(s, c.inputText)
+			n = utf8.RuneCountInString(s)
 			res |= ResChange
 		}
 		// handle backspace / delete (the selection if any, one rune otherwise)
@@ -413,16 +433,17 @@ func (c *Context) TextboxRaw(buf *string, id ID, r Rect, opt Option) int {
 				ed.anchor = ed.cursor - 1
 			}
 			if ed.hasSel() {
-				runes = ed.replaceSel(runes, nil)
+				s = ed.replaceSel(s, "")
+				n = utf8.RuneCountInString(s)
 				res |= ResChange
 			}
 		}
 		if k&KeyDelete != 0 {
-			if !ed.hasSel() && ed.cursor < len(runes) {
+			if !ed.hasSel() && ed.cursor < n {
 				ed.anchor = ed.cursor + 1
 			}
 			if ed.hasSel() {
-				runes = ed.replaceSel(runes, nil)
+				s = ed.replaceSel(s, "")
 				res |= ResChange
 			}
 		}
@@ -431,7 +452,9 @@ func (c *Context) TextboxRaw(buf *string, id ID, r Rect, opt Option) int {
 			c.SetFocus(0)
 			res |= ResSubmit
 		}
-		*buf = string(runes)
+		if res.Changed() {
+			*buf = s
+		}
 	} else if ed.id == id {
 		ed.id = 0 // lost focus: forget the editing state
 	}
@@ -439,87 +462,134 @@ func (c *Context) TextboxRaw(buf *string, id ID, r Rect, opt Option) int {
 	// draw
 	c.DrawControlFrame(id, r, ColorBase, opt)
 	display := textDisplay(*buf, opt)
-	if c.focus == id {
-		dispRunes := []rune(display)
-		color := c.Style.Colors[ColorText]
-		texth := c.TextHeight(font)
-		texty := r.Y + (r.H-texth)/2
-		pad := c.Style.Padding
-
-		// scroll to keep the caret inside the visible span
-		cw := c.TextWidth(font, string(dispRunes[:ed.cursor]))
-		inner := max(r.W-pad*2-1, 1)
-		if cw-ed.scroll > inner {
-			ed.scroll = cw - inner
-		}
-		if cw-ed.scroll < 0 {
-			ed.scroll = cw
-		}
-		textx := r.X + pad - ed.scroll
-
-		c.PushClipRect(r)
-		if ed.hasSel() {
-			x0 := textx + c.TextWidth(font, string(dispRunes[:ed.selMin()]))
-			x1 := textx + c.TextWidth(font, string(dispRunes[:ed.selMax()]))
-			c.DrawRect(Rect{X: x0, Y: texty, W: x1 - x0, H: texth}, c.Style.Colors[ColorSelection])
-		}
-		c.DrawText(font, display, Vec2{X: textx, Y: texty}, color)
-		c.DrawRect(Rect{X: textx + cw, Y: texty, W: 1, H: texth}, color)
-		c.PopClipRect()
-	} else {
+	if c.focus != id {
 		c.DrawControlText(display, r, ColorText, opt)
+		return res
 	}
 
+	color := c.Style.Colors[ColorText]
+	texth := c.TextHeight(font)
+	texty := r.Y + (r.H-texth)/2
+	pad := c.Style.Padding
+
+	// scroll to keep the caret inside the visible span
+	cw := c.TextWidth(font, display[:runeOffset(display, ed.cursor)])
+	inner := max(r.W-pad*2-1, 1)
+	if cw-ed.scroll > inner {
+		ed.scroll = cw - inner
+	}
+	if cw-ed.scroll < 0 {
+		ed.scroll = cw
+	}
+	textx := r.X + pad - ed.scroll
+
+	c.PushClipRect(r)
+	if ed.hasSel() {
+		x0 := textx + c.TextWidth(font, display[:runeOffset(display, ed.selMin())])
+		x1 := textx + c.TextWidth(font, display[:runeOffset(display, ed.selMax())])
+		c.DrawRect(Rect{X: x0, Y: texty, W: x1 - x0, H: texth}, c.Style.Colors[ColorSelection])
+	}
+	c.DrawText(font, display, Vec2{X: textx, Y: texty}, color)
+	c.DrawRect(Rect{X: textx + cw, Y: texty, W: 1, H: texth}, color)
+	c.PopClipRect()
 	return res
 }
 
-// Textbox draws an editable single-line text box bound to buf.
-func (c *Context) Textbox(buf *string) int {
+// Textbox draws an editable single-line text box bound to buf. The result is
+// Changed when the text was edited and Submitted when Enter was pressed. buf
+// must persist across frames: its address is the control's identity.
+func (c *Context) Textbox(buf *string) Result {
 	return c.TextboxEx(buf, 0)
 }
 
 // TextboxPassword draws a textbox that shows PasswordMask in place of each
 // rune while editing buf normally.
-func (c *Context) TextboxPassword(buf *string) int {
+func (c *Context) TextboxPassword(buf *string) Result {
 	return c.TextboxEx(buf, OptPassword)
 }
 
 // TextboxEx draws an editable text box with options.
-func (c *Context) TextboxEx(buf *string, opt Option) int {
+func (c *Context) TextboxEx(buf *string, opt Option) Result {
 	id := c.idFromPtr(unsafe.Pointer(buf))
 	r := c.LayoutNext()
 	return c.TextboxRaw(buf, id, r, opt)
 }
 
+// ---- numeric controls -------------------------------------------------------
+
+// isInteger reports whether T is an integer type.
+func isInteger[T Number]() bool {
+	half := 0.5
+	return T(half) == 0
+}
+
+// isUnsigned reports whether T is an unsigned integer type.
+func isUnsigned[T Number]() bool {
+	var zero T
+	return zero-1 > zero
+}
+
+// fromFloat converts v to T, rounding for integer types and clamping at zero
+// for unsigned ones.
+func fromFloat[T Number](v float64) T {
+	if isInteger[T]() {
+		v = math.Round(v)
+		if isUnsigned[T]() && v < 0 {
+			v = 0
+		}
+	}
+	return T(v)
+}
+
+// defaultFormat returns the value format used when the caller passes "".
+func defaultFormat[T Number]() string {
+	if isInteger[T]() {
+		return intFmt
+	}
+	return sliderFmt
+}
+
 // numberTextbox implements shift+click numeric text entry for sliders/numbers.
 // It returns true while the value is being edited as text.
-func (c *Context) numberTextbox(value *Real, r Rect, id ID) bool {
+func (c *Context) numberTextbox(value *float64, r Rect, id ID) bool {
 	if c.mousePressed == MouseLeft && c.keyDown&KeyShift != 0 && c.hover == id {
 		c.numberEdit = id
 		c.numberEditBuf = fmt.Sprintf(realFmt, *value)
 	}
 	if c.numberEdit == id {
 		res := c.TextboxRaw(&c.numberEditBuf, id, r, 0)
-		if res&ResSubmit != 0 || c.focus != id {
-			*value = parseFloatPrefix(c.numberEditBuf)
-			c.numberEdit = 0
-		} else {
+		if !res.Submitted() && c.focus == id {
 			return true
 		}
+		*value = parseFloatPrefix(c.numberEditBuf)
+		c.numberEdit = 0
 	}
 	return false
 }
 
-// Slider draws a horizontal slider over [lo, hi] bound to value.
-func (c *Context) Slider(value *Real, lo, hi Real) int {
-	return c.SliderEx(value, lo, hi, 0, sliderFmt, OptAlignCenter)
+// Slider draws a horizontal slider over [lo, hi] bound to value, which may be
+// any numeric type: integer sliders snap to whole numbers. The result is
+// Changed while the value changes. Shift-click it to type an exact value.
+//
+//	var volume float64 = 0.5
+//	var level int = 3
+//	ctx.Slider(&volume, 0, 1)
+//	ctx.Slider(&level, 1, 10)
+func (c *Context) Slider[T Number](value *T, lo, hi T) Result {
+	return c.SliderEx(value, lo, hi, 0, "", OptAlignCenter)
 }
 
-// SliderEx draws a slider with a step, value format and options.
-func (c *Context) SliderEx(value *Real, low, high, step Real, format string, opt Option) int {
-	res := 0
+// SliderEx draws a slider with a step (0 for continuous; integer types
+// default to 1), a fmt value format ("" picks %d or %.2f by type) and
+// options.
+func (c *Context) SliderEx[T Number](value *T, low, high, step T, format string, opt Option) Result {
+	var res Result
 	last := *value
-	v := last
+	v := float64(last)
+	lo, hi, st := float64(low), float64(high), float64(step)
+	if st == 0 && isInteger[T]() {
+		st = 1
+	}
 	id := c.idFromPtr(unsafe.Pointer(value))
 	base := c.LayoutNext()
 
@@ -532,16 +602,16 @@ func (c *Context) SliderEx(value *Real, low, high, step Real, format string, opt
 	c.UpdateControl(id, base, opt)
 
 	// handle input
-	if c.focus == id && (c.mouseDown|c.mousePressed) == MouseLeft {
-		v = low + Real(c.mousePos.X-base.X)*(high-low)/Real(base.W)
-		if step != 0 {
-			v = Real(int64((v+step/2)/step)) * step
+	if c.focus == id && (c.mouseDown|c.mousePressed) == MouseLeft && base.W > 0 {
+		v = lo + float64(c.mousePos.X-base.X)*(hi-lo)/float64(base.W)
+		if st != 0 {
+			v = math.Round(v/st) * st
 		}
 	}
 	// clamp and store value, update res
-	v = clampF(v, low, high)
-	*value = v
-	if last != v {
+	nv := fromFloat[T](min(max(v, lo), hi))
+	*value = nv
+	if last != nv {
 		res |= ResChange
 	}
 
@@ -549,57 +619,69 @@ func (c *Context) SliderEx(value *Real, low, high, step Real, format string, opt
 	c.DrawControlFrame(id, base, ColorBase, opt)
 	// draw thumb
 	w := c.Style.ThumbSize
-	x := int((v - low) * Real(base.W-w) / (high - low))
+	x := 0
+	if hi > lo {
+		x = int((float64(nv) - lo) * float64(base.W-w) / (hi - lo))
+	}
 	thumb := Rect{X: base.X + x, Y: base.Y, W: w, H: base.H}
 	c.DrawControlFrame(id, thumb, ColorButton, opt)
 	// draw text
-	c.DrawControlText(fmt.Sprintf(format, v), base, ColorText, opt)
-
+	if format == "" {
+		format = defaultFormat[T]()
+	}
+	c.DrawControlText(fmt.Sprintf(format, nv), base, ColorText, opt)
 	return res
 }
 
-// Number draws a draggable numeric field bound to value, changing by step per
-// pixel of horizontal drag.
-func (c *Context) Number(value *Real, step Real) int {
-	return c.NumberEx(value, step, sliderFmt, OptAlignCenter)
+// Number draws a draggable numeric field bound to value (any numeric type),
+// changing by step per unit of horizontal drag. Shift-click it to type an
+// exact value.
+func (c *Context) Number[T Number](value *T, step T) Result {
+	return c.NumberEx(value, step, "", OptAlignCenter)
 }
 
-// NumberEx draws a numeric field with a value format and options.
-func (c *Context) NumberEx(value *Real, step Real, format string, opt Option) int {
-	res := 0
+// NumberEx draws a numeric field with a fmt value format ("" picks %d or %.2f
+// by type) and options.
+func (c *Context) NumberEx[T Number](value *T, step T, format string, opt Option) Result {
+	var res Result
 	id := c.idFromPtr(unsafe.Pointer(value))
 	base := c.LayoutNext()
 	last := *value
 
 	// handle text input mode
-	if c.numberTextbox(value, base, id) {
+	v := float64(last)
+	if c.numberTextbox(&v, base, id) {
 		return res
+	}
+	if v != float64(last) {
+		*value = fromFloat[T](v)
 	}
 
 	// handle normal mode
 	c.UpdateControl(id, base, opt)
 
 	// handle input
-	if c.focus == id && c.mouseDown == MouseLeft {
-		*value += Real(c.mouseDelta.X) * step
+	if c.focus == id && c.mouseDown == MouseLeft && c.mouseDelta.X != 0 {
+		*value = fromFloat[T](float64(*value) + float64(c.mouseDelta.X)*float64(step))
 	}
-	// set flag if value changed
 	if *value != last {
 		res |= ResChange
 	}
 
-	// draw base
 	c.DrawControlFrame(id, base, ColorBase, opt)
-	// draw text
+	if format == "" {
+		format = defaultFormat[T]()
+	}
 	c.DrawControlText(fmt.Sprintf(format, *value), base, ColorText, opt)
-
 	return res
 }
 
+// ---- headers and tree nodes -------------------------------------------------
+
 // header implements both Header (istreenode=false) and BeginTreenode
 // (istreenode=true). It returns ResActive when expanded.
-func (c *Context) header(label string, istreenode bool, opt Option) int {
-	id := c.GetID([]byte(label))
+func (c *Context) header(label string, istreenode bool, opt Option) Result {
+	id := c.getIDString(label)
 	idx := poolGet(c.treenodePool[:], id)
 	c.layoutRow(1, []int{-1}, 0)
 
@@ -612,7 +694,7 @@ func (c *Context) header(label string, istreenode bool, opt Option) int {
 	c.UpdateControl(id, r, 0)
 
 	// handle click
-	if c.mousePressed == MouseLeft && c.focus == id {
+	if c.clicked(id) {
 		active = !active
 	}
 
@@ -650,26 +732,27 @@ func (c *Context) header(label string, istreenode bool, opt Option) int {
 	return 0
 }
 
-// Header draws a collapsible header. It returns ResActive while expanded.
-func (c *Context) Header(label string) int {
+// Header draws a collapsible header. The result is Active while expanded.
+func (c *Context) Header(label string) Result {
 	return c.HeaderEx(label, 0)
 }
 
-// HeaderEx draws a collapsible header with options (e.g. OptExpanded).
-func (c *Context) HeaderEx(label string, opt Option) int {
+// HeaderEx draws a collapsible header with options (e.g. OptExpanded to
+// start open).
+func (c *Context) HeaderEx(label string, opt Option) Result {
 	return c.header(label, false, opt)
 }
 
-// BeginTreenode starts a collapsible, indented tree node. When it returns
-// ResActive, emit child controls and call EndTreenode.
-func (c *Context) BeginTreenode(label string) int {
+// BeginTreenode starts a collapsible, indented tree node. When the result is
+// Active, emit child controls and call EndTreenode.
+func (c *Context) BeginTreenode(label string) Result {
 	return c.BeginTreenodeEx(label, 0)
 }
 
 // BeginTreenodeEx starts a tree node with options.
-func (c *Context) BeginTreenodeEx(label string, opt Option) int {
+func (c *Context) BeginTreenodeEx(label string, opt Option) Result {
 	res := c.header(label, true, opt)
-	if res&ResActive != 0 {
+	if res.Active() {
 		c.getLayout().indent += c.Style.Indent
 		c.idStack = append(c.idStack, c.lastID)
 	}
@@ -684,21 +767,22 @@ func (c *Context) EndTreenode() {
 
 // parseFloatPrefix parses the leading floating-point number in s, like C's
 // strtod, returning 0 if there is none.
-func parseFloatPrefix(s string) Real {
+func parseFloatPrefix(s string) float64 {
 	s = strings.TrimSpace(s)
 	n := len(s)
+	digits := func(i int) int {
+		for i < n && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		return i
+	}
 	i := 0
 	if i < n && (s[i] == '+' || s[i] == '-') {
 		i++
 	}
-	for i < n && s[i] >= '0' && s[i] <= '9' {
-		i++
-	}
+	i = digits(i)
 	if i < n && s[i] == '.' {
-		i++
-		for i < n && s[i] >= '0' && s[i] <= '9' {
-			i++
-		}
+		i = digits(i + 1)
 	}
 	if i < n && (s[i] == 'e' || s[i] == 'E') {
 		j := i + 1
@@ -706,15 +790,12 @@ func parseFloatPrefix(s string) Real {
 			j++
 		}
 		if j < n && s[j] >= '0' && s[j] <= '9' {
-			i = j
-			for i < n && s[i] >= '0' && s[i] <= '9' {
-				i++
-			}
+			i = digits(j)
 		}
 	}
-	f, err := strconv.ParseFloat(s[:i], 32)
+	f, err := strconv.ParseFloat(s[:i], 64)
 	if err != nil {
 		return 0
 	}
-	return Real(f)
+	return f
 }

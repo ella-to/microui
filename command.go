@@ -39,7 +39,7 @@ type Command struct {
 	Pos   Vec2   // Text
 	Str   string // Text
 	Font  Font   // Text
-	Icon  int    // Icon
+	Icon  Icon   // Icon
 
 	jump int // CommandJump: destination index into commandList
 }
@@ -82,13 +82,13 @@ func (c *Context) Commands() iter.Seq[Command] {
 // result onto the clip stack.
 func (c *Context) PushClipRect(rect Rect) {
 	last := c.GetClipRect()
-	c.clipStack = append(c.clipStack, intersectRects(rect, last))
+	c.clipStack = append(c.clipStack, rect.Intersect(last))
 }
 
 // PopClipRect pops the top clip rectangle off the clip stack.
 func (c *Context) PopClipRect() {
 	if len(c.clipStack) == 0 {
-		panic("miniui: clip stack underflow")
+		panic("microui: clip stack underflow")
 	}
 	c.clipStack = c.clipStack[:len(c.clipStack)-1]
 }
@@ -96,12 +96,12 @@ func (c *Context) PopClipRect() {
 // GetClipRect returns the current clip rectangle.
 func (c *Context) GetClipRect() Rect {
 	if len(c.clipStack) == 0 {
-		panic("miniui: clip stack is empty")
+		panic("microui: clip stack is empty (draw calls must happen inside a window)")
 	}
 	return c.clipStack[len(c.clipStack)-1]
 }
 
-// CheckClip reports how r relates to the current clip rectangle: clipNone if r
+// checkClip reports how r relates to the current clip rectangle: clipNone if r
 // is fully visible, clipAll if fully clipped, or clipPart if partially clipped.
 func (c *Context) checkClip(r Rect) int {
 	cr := c.GetClipRect()
@@ -125,13 +125,13 @@ func (c *Context) SetClip(rect Rect) {
 
 // DrawRect emits a filled rectangle, clipped to the current clip rectangle.
 func (c *Context) DrawRect(rect Rect, color Color) {
-	rect = intersectRects(rect, c.GetClipRect())
-	if rect.W > 0 && rect.H > 0 {
+	rect = rect.Intersect(c.GetClipRect())
+	if !rect.Empty() {
 		c.pushCommand(Command{Type: CommandRect, Rect: rect, Color: color})
 	}
 }
 
-// DrawBox emits the four edges of rect as 1px rectangles.
+// DrawBox emits the four edges of rect as 1-unit-thick rectangles.
 func (c *Context) DrawBox(rect Rect, color Color) {
 	c.DrawRect(Rect{X: rect.X + 1, Y: rect.Y, W: rect.W - 2, H: 1}, color)
 	c.DrawRect(Rect{X: rect.X + 1, Y: rect.Y + rect.H - 1, W: rect.W - 2, H: 1}, color)
@@ -158,7 +158,7 @@ func (c *Context) DrawText(font Font, str string, pos Vec2, color Color) {
 
 // DrawIcon emits an icon command, automatically inserting clip commands when
 // the icon rect is partially clipped.
-func (c *Context) DrawIcon(id int, rect Rect, color Color) {
+func (c *Context) DrawIcon(id Icon, rect Rect, color Color) {
 	clipped := c.checkClip(rect)
 	if clipped == clipAll {
 		return

@@ -125,7 +125,7 @@ func (t *Terminal) DrawText(_ microui.Font, str string, pos microui.Vec2, color 
 }
 
 // DrawIcon draws a single glyph centered within rect.
-func (t *Terminal) DrawIcon(id int, rect microui.Rect, color microui.Color) {
+func (t *Terminal) DrawIcon(id microui.Icon, rect microui.Rect, color microui.Color) {
 	drawIcon(t.scr, id, rect, t.clip, color)
 }
 
@@ -278,7 +278,7 @@ func contains(rect microui.Rect, x, y int) bool {
 }
 
 // iconGlyph maps a microui icon id to a single display rune.
-func iconGlyph(id int) rune {
+func iconGlyph(id microui.Icon) rune {
 	switch id {
 	case microui.IconClose:
 		return '✕'
@@ -322,7 +322,7 @@ func drawText(s *screen, str string, pos microui.Vec2, clip microui.Rect, color 
 }
 
 // drawIcon draws a single glyph centered within rect.
-func drawIcon(s *screen, id int, rect, clip microui.Rect, color microui.Color) {
+func drawIcon(s *screen, id microui.Icon, rect, clip microui.Rect, color microui.Color) {
 	x := rect.X + (rect.W-1)/2
 	y := rect.Y + (rect.H-1)/2
 	if contains(clip, x, y) && s.inBounds(x, y) {
