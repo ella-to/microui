@@ -1,8 +1,10 @@
 package renderer
 
 import (
+	"bytes"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"ella.to/microui"
 )
@@ -14,6 +16,18 @@ func testCtx(t *Terminal) *microui.Context {
 	st := t.Style()
 	c.Style = &st
 	return c
+}
+
+// newTestTerminal returns a terminal that takes the interactive (ANSI diff)
+// output path but writes into a buffer instead of a tty.
+func newTestTerminal(w, h int, mode ColorMode) (*Terminal, *bytes.Buffer) {
+	var out bytes.Buffer
+	t := NewHeadless(w, h)
+	t.interactive = true
+	t.out = &out
+	t.enc.mode = mode
+	t.fullRedraw = true
+	return t, &out
 }
 
 // findRune reports whether r appears anywhere on the screen.
@@ -32,16 +46,15 @@ func TestPaintWindow(t *testing.T) {
 	bg := microui.RGBA(0, 0, 0, 255)
 
 	c.Begin()
-	if c.BeginWindow("Hi", microui.Rect{X: 2, Y: 1, W: 20, H: 8}) != 0 {
+	if c.BeginWindow("Hi", microui.Rect{X: 2, Y: 1, W: 20, H: 8}).Active() {
 		c.LayoutRow([]int{-1}, 0)
 		c.Button("Go")
 		c.EndWindow()
 	}
 	c.End()
 	paint(term, c, bg)
-	scr := term.scr
+	scr := term.back
 
-	// The window background color should appear somewhere (distinct from bg).
 	wbg := c.Style.Colors[microui.ColorWindowBG]
 	foundWBG := false
 	for i := range scr.cells {
@@ -53,47 +66,88 @@ func TestPaintWindow(t *testing.T) {
 	if !foundWBG {
 		t.Errorf("window background color %+v not found on screen", wbg)
 	}
-
-	// The title text and button label should be present.
 	for _, r := range "HiGo" {
 		if !findRune(scr, r) {
 			t.Errorf("expected rune %q on screen", r)
 		}
 	}
-
-	// The close icon should be drawn.
 	if !findRune(scr, iconGlyph(microui.IconClose)) {
 		t.Errorf("close icon glyph not found")
 	}
+	if !strings.Contains(term.Text(), "Go") {
+		t.Errorf("Text() snapshot missing the button label:\n%s", term.Text())
+	}
 }
 
-func TestRenderANSINonEmpty(t *testing.T) {
-	term := NewHeadless(30, 6)
-	c := testCtx(term)
-	c.Begin()
-	if c.BeginWindow("W", microui.Rect{X: 0, Y: 0, W: 16, H: 5}) != 0 {
-		c.EndWindow()
+func TestColorModesEmitMatchingSequences(t *testing.T) {
+	cases := []struct {
+		mode      ColorMode
+		want, not string
+	}{
+		{ColorTrue, "48;2;", "48;5;"},
+		{Color256, "48;5;", "48;2;"},
+		{Color16, "\x1b[3", "48;"},
 	}
-	c.End()
-	paint(term, c, microui.RGBA(0, 0, 0, 255))
+	for _, tc := range cases {
+		term, out := newTestTerminal(30, 6, tc.mode)
+		c := testCtx(term)
+		c.Begin()
+		if c.BeginWindow("W", microui.Rect{W: 16, H: 5}).Active() {
+			c.EndWindow()
+		}
+		c.End()
+		Paint(term, c, microui.RGBA(0, 0, 0, 255))
+		s := out.String()
+		if !strings.Contains(s, tc.want) || strings.Contains(s, tc.not) {
+			t.Errorf("%v mode: output should contain %q and not %q", tc.mode, tc.want, tc.not)
+		}
+		if !strings.HasPrefix(s, "\x1b[?2026h") || !strings.HasSuffix(s, "\x1b[0m\x1b[?2026l") {
+			t.Errorf("%v mode: frame not wrapped in a synchronized update", tc.mode)
+		}
+	}
+}
 
-	out := renderANSI(term.scr, true)
-	if !strings.Contains(out, "\x1b[48;2;") {
-		t.Errorf("ANSI output missing truecolor background sequences")
-	}
-	if !strings.HasSuffix(out, "\x1b[0m") {
-		t.Errorf("ANSI output should end with a reset")
+func TestPresentWritesOnlyChanges(t *testing.T) {
+	term, out := newTestTerminal(40, 10, ColorTrue)
+	label := "hello"
+	frame := func() {
+		term.Clear(microui.RGBA(0, 0, 0, 255))
+		term.DrawText(nil, label, microui.Vec2{X: 3, Y: 4}, microui.RGBA(255, 255, 255, 255))
+		out.Reset()
+		term.Present()
 	}
 
-	out = renderANSI(term.scr, false)
-	if !strings.Contains(out, "\x1b[48;5;") {
-		t.Errorf("256-color output missing indexed background sequences")
+	frame()
+	if out.Len() < 40*10 {
+		t.Fatalf("first frame wrote %d bytes, want a full repaint", out.Len())
 	}
-	if strings.Contains(out, "38;2;") || strings.Contains(out, "48;2;") {
-		t.Errorf("256-color output should not contain truecolor sequences")
+
+	frame()
+	if out.Len() != 0 {
+		t.Fatalf("identical frame wrote %q, want nothing", out.String())
 	}
-	if !strings.HasSuffix(out, "\x1b[0m") {
-		t.Errorf("256-color output should end with a reset")
+
+	label = "help!"
+	frame()
+	s := out.String()
+	if !strings.Contains(s, "p!") || strings.Contains(s, "hel") {
+		t.Fatalf("one-word change wrote %q, want just the changed cells", s)
+	}
+	if !strings.Contains(s, "\x1b[5;7H") {
+		t.Fatalf("changed cells not positioned at row 5 col 7: %q", s)
+	}
+}
+
+func TestRedrawRepaintsEverything(t *testing.T) {
+	term, out := newTestTerminal(20, 4, Color256)
+	term.Clear(microui.RGBA(0, 0, 0, 255))
+	term.Present()
+	term.Clear(microui.RGBA(0, 0, 0, 255))
+	term.Redraw()
+	out.Reset()
+	term.Present()
+	if !strings.Contains(out.String(), "\x1b[2J") || out.Len() < 20*4 {
+		t.Fatalf("Redraw did not force a full repaint: %q", out.String())
 	}
 }
 
@@ -117,29 +171,124 @@ func TestAnsi256(t *testing.T) {
 	}
 }
 
+func TestAnsi16(t *testing.T) {
+	if got := ansi16(microui.Hex(0xff0000)); got != 9 {
+		t.Errorf("bright red = %d, want 9", got)
+	}
+	if got := ansi16(microui.Hex(0x101010)); got != 0 {
+		t.Errorf("near black = %d, want 0", got)
+	}
+}
+
 func TestClipKeepsTextInsidePanel(t *testing.T) {
 	// Text far longer than its column must not write past the screen bounds
-	// and must be clipped to the window; this mainly asserts no panic and that
-	// the clip path is exercised.
+	// and must be clipped to the window.
 	term := NewHeadless(50, 16)
 	c := testCtx(term)
 	c.Begin()
-	if c.BeginWindowEx("L", microui.Rect{X: 0, Y: 0, W: 20, H: 12}, microui.OptNoTitle) != 0 {
+	if c.BeginWindowEx("L", microui.Rect{W: 20, H: 12}, microui.OptNoTitle).Active() {
 		c.LayoutRow([]int{-1}, -1)
 		c.Text(strings.Repeat("word ", 200))
 		c.EndWindow()
 	}
 	c.End()
 	paint(term, c, microui.RGBA(0, 0, 0, 255))
-	scr := term.scr
-
-	// No cell outside the window's right edge (plus border) should contain a
-	// non-space glyph from the wrapped text.
-	for y := 0; y < scr.h; y++ {
+	scr := term.back
+	for y := range scr.h {
 		for x := 25; x < scr.w; x++ {
 			if ch := scr.at(x, y).ch; ch != ' ' && ch != 0 {
 				t.Fatalf("text leaked outside clip at (%d,%d): %q", x, y, ch)
 			}
 		}
+	}
+}
+
+func TestStringWidth(t *testing.T) {
+	cases := map[string]int{
+		"":         0,
+		"abc":      3,
+		"日本語":      6,
+		"héllo":    5,
+		"é":       1, // combining acute accent
+		"🙂":        2,
+		"a\tb":     2, // control characters take no columns
+		"✓ ✕ ▶ ▼":  7,
+		"한국어 text": 11,
+	}
+	for s, want := range cases {
+		if got := StringWidth(s); got != want {
+			t.Errorf("StringWidth(%q) = %d, want %d", s, got, want)
+		}
+	}
+}
+
+func TestWideTextOccupiesTwoCells(t *testing.T) {
+	term, out := newTestTerminal(10, 1, ColorTrue)
+	term.Clear(microui.RGBA(0, 0, 0, 255))
+	term.DrawText(nil, "a日b", microui.Vec2{X: 0, Y: 0}, microui.RGBA(255, 255, 255, 255))
+	if got := term.Text(); got != "a日b      \n" {
+		t.Fatalf("Text() = %q", got)
+	}
+	term.Present()
+	if n := strings.Count(out.String(), "日"); n != 1 {
+		t.Fatalf("wide rune written %d times, want once", n)
+	}
+	// overwriting the right half of the wide glyph must blank its left half
+	term.Clear(microui.RGBA(0, 0, 0, 255))
+	term.DrawText(nil, "a日b", microui.Vec2{X: 0, Y: 0}, microui.RGBA(255, 255, 255, 255))
+	term.DrawText(nil, "X", microui.Vec2{X: 2, Y: 0}, microui.RGBA(255, 255, 255, 255))
+	if got := term.Text(); got != "a Xb      \n" {
+		t.Fatalf("half-overwritten wide glyph: Text() = %q", got)
+	}
+}
+
+func TestWideTextClippedAtEdge(t *testing.T) {
+	term := NewHeadless(10, 1)
+	term.Clear(microui.RGBA(0, 0, 0, 255))
+	term.SetClip(microui.Rect{W: 2, H: 1})
+	term.DrawText(nil, "a日", microui.Vec2{}, microui.RGBA(255, 255, 255, 255))
+	if got := term.Text(); got != "a         \n" {
+		t.Fatalf("a wide glyph straddling the clip edge must be dropped: %q", got)
+	}
+}
+
+func TestTranslucentFillBlends(t *testing.T) {
+	term := NewHeadless(4, 1)
+	term.Clear(microui.RGBA(0, 0, 0, 255))
+	term.DrawText(nil, "ab", microui.Vec2{}, microui.RGBA(200, 200, 200, 255))
+	term.FillRect(microui.Rect{W: 4, H: 1}, microui.RGBA(255, 255, 255, 128))
+	c := term.back.at(0, 0)
+	if c.ch != 'a' {
+		t.Fatalf("translucent fill erased the glyph: %q", c.ch)
+	}
+	if c.bg.R < 120 || c.bg.R > 135 {
+		t.Fatalf("background after 50%% white over black = %d, want ~128", c.bg.R)
+	}
+	if c.fg.R <= 200 {
+		t.Fatalf("glyph color should be tinted toward white, got %d", c.fg.R)
+	}
+}
+
+func TestCellHasNoPadding(t *testing.T) {
+	// cellBytes compares rows as raw memory, which is only sound if cell
+	// has no padding bytes.
+	if got := unsafe.Sizeof(cell{}); got != 12 {
+		t.Fatalf("cell is %d bytes, want 12 (no padding)", got)
+	}
+}
+
+func TestPresentRewritesShortGapsInsteadOfMoving(t *testing.T) {
+	term, out := newTestTerminal(20, 1, ColorTrue)
+	frame := func(s string) {
+		term.Clear(microui.RGBA(0, 0, 0, 255))
+		term.DrawText(nil, s, microui.Vec2{}, microui.RGBA(255, 255, 255, 255))
+		out.Reset()
+		term.Present()
+	}
+	frame("abcdef")
+	frame("Xbcdeg") // first and last change, four unchanged cells between
+	s := out.String()
+	if strings.Count(s, "H") != 1 || !strings.Contains(s, "Xbcdeg") {
+		t.Fatalf("expected one cursor move and the gap rewritten, got %q", s)
 	}
 }
