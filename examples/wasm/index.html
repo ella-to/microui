@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>microui · wasm</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #282c34; }
+    /* The canvas fills the window in CSS pixels; canvas.go scales its
+       backing store by devicePixelRatio so text stays sharp. */
+    #screen { display: block; width: 100vw; height: 100vh; outline: none; }
+    #status { position: fixed; left: 12px; bottom: 8px; color: #abb2bf;
+              font: 12px system-ui, sans-serif; }
+  </style>
+</head>
+<body>
+  <canvas id="screen" tabindex="0"></canvas>
+  <div id="status">loading…</div>
+  <script src="wasm_exec.js"></script>
+  <script>
+    const status = document.getElementById("status");
+    const go = new Go();
+    WebAssembly.instantiateStreaming(fetch("main.wasm"), go.importObject)
+      .then(({ instance }) => {
+        status.remove();
+        document.getElementById("screen").focus();
+        go.run(instance);
+      })
+      .catch((err) => {
+        status.textContent = "failed to load main.wasm: " + err;
+        console.error(err);
+      });
+  </script>
+</body>
+</html>
