@@ -140,7 +140,9 @@ func (b *browser) tree(ctx *microui.Context, dir string) {
 			if full == b.selected {
 				label = "▸ " + label
 			}
-			// Option 0 (no OptAlignCenter) keeps the label left-aligned.
+			// One row tall, like the folder nodes (Style.HeaderHeight), so
+			// the tree stays dense; option 0 keeps the label left-aligned.
+			ctx.LayoutRow([]int{-1}, 1)
 			if ctx.ButtonEx(label, 0, 0).Submitted() {
 				b.open(full)
 			}
