@@ -195,3 +195,40 @@ func TestTextboxDoesNotRewriteUnchangedBuffer(t *testing.T) {
 		t.Fatalf("multibyte editing = %q, want %q", buf, "abc→é")
 	}
 }
+
+func TestClosePopupFromInsideThePopup(t *testing.T) {
+	c := newTestCtx()
+	closeNow := false
+	open := false
+	ui := func() {
+		if c.BeginWindow("w", Rect{W: 200, H: 200}).Active() {
+			if c.BeginPopup("menu").Active() {
+				open = true
+				if closeNow {
+					c.ClosePopup("menu")
+				}
+				c.EndPopup()
+			}
+			c.EndWindow()
+		}
+	}
+	// OpenPopup must be called in the same scope as BeginPopup
+	runFrame(c, func() {
+		if c.BeginWindow("w", Rect{W: 200, H: 200}).Active() {
+			c.OpenPopup("menu")
+			c.EndWindow()
+		}
+	})
+	open = false
+	runFrame(c, ui)
+	if !open {
+		t.Fatal("popup did not open")
+	}
+	closeNow = true
+	runFrame(c, ui) // closes from inside
+	open = false
+	runFrame(c, ui)
+	if open {
+		t.Fatal("ClosePopup called inside the popup did not close it")
+	}
+}

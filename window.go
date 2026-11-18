@@ -254,6 +254,22 @@ func (c *Context) BeginPopup(name string) Result {
 // ClosePopup closes the popup (or window) named name. It takes effect from
 // the next frame, so it is safe to call between BeginPopup and EndPopup.
 func (c *Context) ClosePopup(name string) {
+	// Between BeginPopup and EndPopup the popup's own id is on top of the id
+	// stack, so a plain GetContainer(name) would hash the name one scope too
+	// deep. Detect that case and resolve the name in the scope the popup was
+	// opened from.
+	if n := len(c.idStack); n > 0 {
+		parent := hashInitial
+		if n > 1 {
+			parent = c.idStack[n-2]
+		}
+		if id := hashString(parent, name); id == c.idStack[n-1] {
+			if cnt := c.getContainer(id, OptClosed); cnt != nil {
+				cnt.Open = false
+			}
+			return
+		}
+	}
 	c.GetContainer(name).Open = false
 }
 
