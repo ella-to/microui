@@ -50,7 +50,7 @@ type Terminal struct {
 	framesDrawn int
 
 	// input
-	in       chan []byte
+	in       <-chan []byte
 	pending  []byte
 	parser   inputParser
 	heldMods microui.Key // modifiers synthesized for a mouse click, released next Poll
@@ -119,7 +119,6 @@ func NewTerminal(opts ...TerminalOption) (*Terminal, error) {
 		cfg:         cfg,
 		interactive: true,
 		out:         os.Stdout,
-		in:          make(chan []byte, 64),
 		wake:        make(chan struct{}, 1),
 		fullRedraw:  true,
 	}
@@ -132,7 +131,7 @@ func NewTerminal(opts ...TerminalOption) (*Terminal, error) {
 	t.clip = t.back.bounds()
 
 	t.watchSignals()
-	go t.readInput()
+	t.in = attachStdin(t)
 	return t, nil
 }
 
@@ -298,6 +297,9 @@ func (t *Terminal) Poll(ctx *microui.Context) bool {
 		select {
 		case b, ok := <-t.in:
 			if !ok {
+				if err := stdinErr(); err != nil {
+					t.fail(err)
+				}
 				t.quit.Store(true)
 				return true
 			}
@@ -354,6 +356,9 @@ func (t *Terminal) checkResize() {
 }
 
 // Close restores the terminal to its original state. Safe to call repeatedly.
+// Another Terminal may be opened afterwards. Note that stdin keeps being read
+// in the background (a blocking read cannot be cancelled portably), so read
+// further user input through a new Terminal rather than from os.Stdin.
 func (t *Terminal) Close() error {
 	if !t.interactive {
 		return nil
@@ -368,25 +373,68 @@ func (t *Terminal) Close() error {
 	return nil
 }
 
-// readInput pumps stdin into the input channel until EOF or an error. It
-// cannot be interrupted, so after Close it exits on the next read.
-func (t *Terminal) readInput() {
+// stdinPump reads stdin on a single goroutine for the life of the process. A
+// blocking read cannot be interrupted, so a per-Terminal reader would outlive
+// Close and steal input from the next Terminal; one shared pump hands bytes to
+// whichever Terminal is current instead.
+var stdinPump struct {
+	once sync.Once
+	ch   chan []byte // closed on EOF or error
+	mu   sync.Mutex
+	err  error         // the read error that closed ch (nil for EOF)
+	wake chan struct{} // the current Terminal's wake channel
+}
+
+// attachStdin makes t the receiver of stdin wake-ups and returns the shared
+// input channel, starting the pump on first use.
+func attachStdin(t *Terminal) <-chan []byte {
+	stdinPump.mu.Lock()
+	stdinPump.wake = t.wake
+	stdinPump.mu.Unlock()
+	stdinPump.once.Do(func() {
+		stdinPump.ch = make(chan []byte, 64)
+		go pumpStdin()
+	})
+	return stdinPump.ch
+}
+
+func pumpStdin() {
+	notify := func() {
+		stdinPump.mu.Lock()
+		w := stdinPump.wake
+		stdinPump.mu.Unlock()
+		if w != nil {
+			select {
+			case w <- struct{}{}:
+			default:
+			}
+		}
+	}
 	buf := make([]byte, 4096)
 	for {
 		n, err := os.Stdin.Read(buf)
 		if n > 0 {
-			t.in <- append([]byte(nil), buf[:n]...)
-			t.signalWake()
+			stdinPump.ch <- append([]byte(nil), buf[:n]...)
+			notify()
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) {
-				t.fail(err)
+				stdinPump.mu.Lock()
+				stdinPump.err = err
+				stdinPump.mu.Unlock()
 			}
-			close(t.in)
-			t.signalWake()
+			close(stdinPump.ch)
+			notify()
 			return
 		}
 	}
+}
+
+// stdinErr reports the error that ended stdin, if any.
+func stdinErr() error {
+	stdinPump.mu.Lock()
+	defer stdinPump.mu.Unlock()
+	return stdinPump.err
 }
 
 // Escape sequences toggling the terminal modes the renderer relies on.

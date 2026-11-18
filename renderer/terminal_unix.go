@@ -20,10 +20,15 @@ type sysState struct {
 	sig   chan os.Signal // SIGWINCH plus the quit signals
 }
 
-// isTerminal reports whether f is a character device (a tty).
+// isTerminal reports whether f is a tty: a character device other than
+// /dev/null (which IDEs and service managers often attach to stdin).
 func isTerminal(f *os.File) bool {
 	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	if err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	null, err := os.Stat(os.DevNull)
+	return err != nil || !os.SameFile(fi, null)
 }
 
 // stty runs stty(1) against the controlling terminal (os.Stdin) and returns
