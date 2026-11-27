@@ -276,3 +276,41 @@ func TestHeaderHeight(t *testing.T) {
 		}
 	}
 }
+
+func TestNumberFormatUpdatesAcrossFrames(t *testing.T) {
+	c := newTestCtx()
+	v := 10
+	f := float32(1.25)
+	fmtStr := "%.2f"
+
+	collect := func() []string {
+		var texts []string
+		runFrame(c, func() {
+			if c.BeginWindowEx("w", Rect{W: 200, H: 80}, OptNoTitle|OptNoScroll).Active() {
+				c.LayoutRow([]int{-1}, 0)
+				c.Slider(&v, 0, 100)
+				c.SliderEx(&f, 0, 10, 0, fmtStr, OptAlignCenter)
+				c.EndWindow()
+			}
+		})
+		for cmd := range c.Commands() {
+			if cmd.Type == CommandText {
+				texts = append(texts, cmd.Str)
+			}
+		}
+		return texts
+	}
+
+	if got := collect(); !slices.Contains(got, "10") || !slices.Contains(got, "1.25") {
+		t.Fatalf("frame 1 = %q, want 10 and 1.25", got)
+	}
+	v = 99
+	f = 3.5
+	if got := collect(); !slices.Contains(got, "99") || !slices.Contains(got, "3.50") {
+		t.Fatalf("frame 2 after value update = %q, want 99 and 3.50", got)
+	}
+	fmtStr = "%.1f%%"
+	if got := collect(); !slices.Contains(got, "3.5%") {
+		t.Fatalf("frame 3 after format change = %q, want 3.5%%", got)
+	}
+}

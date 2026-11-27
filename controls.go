@@ -55,10 +55,14 @@ func (c *Context) DrawControlFrame(id ID, rect Rect, colorid ColorID, opt Option
 // DrawControlText draws str inside rect, aligned per opt (left by default,
 // OptAlignCenter or OptAlignRight otherwise), clipped to rect.
 func (c *Context) DrawControlText(str string, rect Rect, colorid ColorID, opt Option) {
+	cr := rect.Intersect(c.GetClipRect())
+	if cr.Empty() {
+		return
+	}
 	font := c.Style.Font
 	tw := c.TextWidth(font, str)
-	c.PushClipRect(rect)
-	pos := Vec2{Y: rect.Y + (rect.H-c.TextHeight(font))/2}
+	th := c.TextHeight(font)
+	pos := Vec2{Y: rect.Y + (rect.H-th)/2}
 	switch {
 	case opt.has(OptAlignCenter):
 		pos.X = rect.X + (rect.W-tw)/2
@@ -67,14 +71,14 @@ func (c *Context) DrawControlText(str string, rect Rect, colorid ColorID, opt Op
 	default:
 		pos.X = rect.X + c.Style.Padding
 	}
-	c.DrawText(font, str, pos, c.Style.Colors[colorid])
-	c.PopClipRect()
+	c.drawTextClipped(font, str, pos, tw, th, c.Style.Colors[colorid], cr)
 }
 
 // MouseOver reports whether the mouse is over rect, within the clip rectangle,
 // and inside the hovered root container.
 func (c *Context) MouseOver(rect Rect) bool {
-	return rect.Contains(c.mousePos) &&
+	return c.hoverRoot != nil &&
+		rect.Contains(c.mousePos) &&
 		c.GetClipRect().Contains(c.mousePos) &&
 		c.inHoverRoot()
 }
@@ -83,14 +87,13 @@ func (c *Context) MouseOver(rect Rect) bool {
 // occupying rect. Call it once per frame for every custom control, before
 // reading Hover/Focus for that control.
 func (c *Context) UpdateControl(id ID, rect Rect, opt Option) {
-	mouseover := c.MouseOver(rect)
-
 	if c.focus == id {
 		c.updatedFocus = true
 	}
 	if opt.has(OptNoInteract) {
 		return
 	}
+	mouseover := c.MouseOver(rect)
 	if mouseover && c.mouseDown == 0 {
 		c.hover = id
 	}
@@ -125,20 +128,31 @@ func (c *Context) clicked(id ID) bool {
 func (c *Context) Text(text string) {
 	font := c.Style.Font
 	color := c.Style.Colors[ColorText]
+	th := c.TextHeight(font)
+	spaceW := c.TextWidth(font, " ")
+	cr := c.GetClipRect()
 	c.LayoutBeginColumn()
-	c.layoutRow(1, []int{-1}, c.TextHeight(font))
-	for line := range strings.SplitSeq(text, "\n") {
-		c.wrapLine(font, line, color)
+	c.layoutRowSingle(-1, th)
+	for {
+		nl := strings.IndexByte(text, '\n')
+		if nl < 0 {
+			c.wrapLine(font, text, color, spaceW, th, cr)
+			break
+		}
+		c.wrapLine(font, text[:nl], color, spaceW, th, cr)
+		text = text[nl+1:]
 	}
 	c.LayoutEndColumn()
 }
 
 // wrapLine lays out one newline-free line, breaking at spaces so each row fits
 // the column width. A single word wider than the column gets its own row.
-func (c *Context) wrapLine(font Font, line string, color Color) {
+func (c *Context) wrapLine(font Font, line string, color Color, spaceW, th int, cr Rect) {
 	r := c.LayoutNext()
+	if len(line) == 0 {
+		return
+	}
 	start, end, w := 0, 0, 0 // current row is line[start:end], w wide
-	spaceW := c.TextWidth(font, " ")
 	p := 0
 	for {
 		// find the next word line[p:q]
@@ -149,7 +163,9 @@ func (c *Context) wrapLine(font Font, line string, color Color) {
 		ww := c.TextWidth(font, line[p:q])
 		if end > start && w+ww > r.W {
 			// the word does not fit: flush the row and start a new one at it
-			c.DrawText(font, line[start:end], Vec2{X: r.X, Y: r.Y}, color)
+			if r.Y <= cr.Y+cr.H && r.Y+th >= cr.Y && r.X <= cr.X+cr.W {
+				c.drawTextClipped(font, line[start:end], Vec2{X: r.X, Y: r.Y}, w-spaceW, th, color, cr)
+			}
 			r = c.LayoutNext()
 			start, w = p, 0
 		}
@@ -161,8 +177,8 @@ func (c *Context) wrapLine(font Font, line string, color Color) {
 		w += spaceW
 		p = q + 1
 	}
-	if end > start {
-		c.DrawText(font, line[start:end], Vec2{X: r.X, Y: r.Y}, color)
+	if end > start && r.Y <= cr.Y+cr.H && r.Y+th >= cr.Y && r.X <= cr.X+cr.W {
+		c.drawTextClipped(font, line[start:end], Vec2{X: r.X, Y: r.Y}, w, th, color, cr)
 	}
 }
 
@@ -286,20 +302,27 @@ func textDisplay(s string, opt Option) string {
 func (c *Context) textIndexAt(disp string, font Font, textx, x int) int {
 	best, bestDist := 0, math.MaxInt
 	i := 0
-	check := func(prefix string) {
-		d := textx + c.TextWidth(font, prefix) - x
-		if d < 0 {
-			d = -d
+	for bi := range disp {
+		d := textx + c.TextWidth(font, disp[:bi]) - x
+		abs := d
+		if abs < 0 {
+			abs = -abs
 		}
-		if d < bestDist {
-			best, bestDist = i, d
+		if abs < bestDist {
+			best, bestDist = i, abs
+		}
+		if d >= 0 {
+			return best
 		}
 		i++
 	}
-	for bi := range disp {
-		check(disp[:bi])
+	d := textx + c.TextWidth(font, disp) - x
+	if d < 0 {
+		d = -d
 	}
-	check(disp)
+	if d < bestDist {
+		best = i
+	}
 	return best
 }
 
@@ -339,6 +362,9 @@ func (c *Context) TextboxRaw(buf *string, id ID, r Rect, opt Option) Result {
 	font := c.Style.Font
 	ed := &c.textEdit
 
+	var cachedDisp string
+	hasCachedDisp := false
+
 	if c.focus == id {
 		s := *buf
 		n := utf8.RuneCountInString(s)
@@ -348,31 +374,34 @@ func (c *Context) TextboxRaw(buf *string, id ID, r Rect, opt Option) Result {
 		}
 		ed.clampTo(n)
 
-		disp := textDisplay(s, opt)
-		textx := r.X + c.Style.Padding - ed.scroll
-
 		// mouse: click to place the caret, drag to select, double-click for
 		// the word under the caret
-		if c.mousePressed&MouseLeft != 0 && c.hover == id {
-			i := c.textIndexAt(disp, font, textx, c.mousePos.X)
-			t := now()
-			dx := c.mousePos.X - ed.lastClickX
-			if dx < 0 {
-				dx = -dx
+		wantClick := c.mousePressed&MouseLeft != 0 && c.hover == id
+		if wantClick || ed.drag {
+			cachedDisp = textDisplay(s, opt)
+			hasCachedDisp = true
+			textx := r.X + c.Style.Padding - ed.scroll
+			if wantClick {
+				i := c.textIndexAt(cachedDisp, font, textx, c.mousePos.X)
+				t := now()
+				dx := c.mousePos.X - ed.lastClickX
+				if dx < 0 {
+					dx = -dx
+				}
+				if t.Sub(ed.lastClick) < doubleClickWindow && dx <= doubleClickSlop {
+					ed.anchor, ed.cursor = wordBoundsAt(cachedDisp, i)
+				} else {
+					ed.cursor, ed.anchor = i, i
+					ed.drag = true
+				}
+				ed.lastClick, ed.lastClickX = t, c.mousePos.X
 			}
-			if t.Sub(ed.lastClick) < doubleClickWindow && dx <= doubleClickSlop {
-				ed.anchor, ed.cursor = wordBoundsAt(disp, i)
-			} else {
-				ed.cursor, ed.anchor = i, i
-				ed.drag = true
-			}
-			ed.lastClick, ed.lastClickX = t, c.mousePos.X
-		}
-		if ed.drag {
-			if c.mouseDown&MouseLeft != 0 {
-				ed.cursor = c.textIndexAt(disp, font, textx, c.mousePos.X)
-			} else {
-				ed.drag = false
+			if ed.drag {
+				if c.mouseDown&MouseLeft != 0 {
+					ed.cursor = c.textIndexAt(cachedDisp, font, textx, c.mousePos.X)
+				} else {
+					ed.drag = false
+				}
 			}
 		}
 
@@ -461,7 +490,10 @@ func (c *Context) TextboxRaw(buf *string, id ID, r Rect, opt Option) Result {
 
 	// draw
 	c.DrawControlFrame(id, r, ColorBase, opt)
-	display := textDisplay(*buf, opt)
+	display := cachedDisp
+	if !hasCachedDisp || res.Changed() {
+		display = textDisplay(*buf, opt)
+	}
 	if c.focus != id {
 		c.DrawControlText(display, r, ColorText, opt)
 		return res
@@ -483,15 +515,24 @@ func (c *Context) TextboxRaw(buf *string, id ID, r Rect, opt Option) Result {
 	}
 	textx := r.X + pad - ed.scroll
 
-	c.PushClipRect(r)
-	if ed.hasSel() {
-		x0 := textx + c.TextWidth(font, display[:runeOffset(display, ed.selMin())])
-		x1 := textx + c.TextWidth(font, display[:runeOffset(display, ed.selMax())])
-		c.DrawRect(Rect{X: x0, Y: texty, W: x1 - x0, H: texth}, c.Style.Colors[ColorSelection])
+	cr := r.Intersect(c.GetClipRect())
+	if !cr.Empty() {
+		if ed.hasSel() {
+			x0 := textx + c.TextWidth(font, display[:runeOffset(display, ed.selMin())])
+			x1 := textx + c.TextWidth(font, display[:runeOffset(display, ed.selMax())])
+			if sel := (Rect{X: x0, Y: texty, W: x1 - x0, H: texth}).Intersect(cr); !sel.Empty() {
+				c.pushCommand(Command{Type: CommandRect, Rect: sel, Color: c.Style.Colors[ColorSelection]})
+			}
+		}
+		dw := cw
+		if ed.cursor != utf8.RuneCountInString(display) {
+			dw = c.TextWidth(font, display)
+		}
+		c.drawTextClipped(font, display, Vec2{X: textx, Y: texty}, dw, texth, color, cr)
+		if caret := (Rect{X: textx + cw, Y: texty, W: 1, H: texth}).Intersect(cr); !caret.Empty() {
+			c.pushCommand(Command{Type: CommandRect, Rect: caret, Color: color})
+		}
 	}
-	c.DrawText(font, display, Vec2{X: textx, Y: texty}, color)
-	c.DrawRect(Rect{X: textx + cw, Y: texty, W: 1, H: texth}, color)
-	c.PopClipRect()
 	return res
 }
 
@@ -541,14 +582,6 @@ func fromFloat[T Number](v float64) T {
 	return T(v)
 }
 
-// defaultFormat returns the value format used when the caller passes "".
-func defaultFormat[T Number]() string {
-	if isInteger[T]() {
-		return intFmt
-	}
-	return sliderFmt
-}
-
 // numberTextbox implements shift+click numeric text entry for sliders/numbers.
 // It returns true while the value is being edited as text.
 func (c *Context) numberTextbox(value *float64, r Rect, id ID) bool {
@@ -565,6 +598,54 @@ func (c *Context) numberTextbox(value *float64, r Rect, id ID) bool {
 		c.numberEdit = 0
 	}
 	return false
+}
+
+// formatNumber formats v for SliderEx/NumberEx, using strconv directly for
+// the default formats and caching the result per control across frames so
+// unchanged numeric controls don't allocate.
+func formatNumber[T Number](c *Context, id ID, v T, format string) string {
+	var bits uint64
+	var kind uint8
+	if !isInteger[T]() {
+		if unsafe.Sizeof(v) == 4 {
+			bits = uint64(math.Float32bits(float32(v)))
+			kind = 1
+		} else {
+			bits = math.Float64bits(float64(v))
+			kind = 2
+		}
+	} else if isUnsigned[T]() {
+		bits = uint64(v)
+		kind = 3 + uint8(unsafe.Sizeof(v))
+	} else {
+		bits = uint64(int64(v))
+		kind = 12 + uint8(unsafe.Sizeof(v))
+	}
+
+	e := &c.numFmtCache[id&(numFmtCacheSize-1)]
+	if e.kind == kind && e.id == id && e.bits == bits && e.format == format {
+		return e.str
+	}
+
+	var s string
+	switch {
+	case !isInteger[T]() && (format == "" || format == sliderFmt):
+		if unsafe.Sizeof(v) == 4 {
+			s = strconv.FormatFloat(float64(v), 'f', 2, 32)
+		} else {
+			s = strconv.FormatFloat(float64(v), 'f', 2, 64)
+		}
+	case isInteger[T]() && (format == "" || format == intFmt):
+		if isUnsigned[T]() {
+			s = strconv.FormatUint(uint64(v), 10)
+		} else {
+			s = strconv.FormatInt(int64(v), 10)
+		}
+	default:
+		s = fmt.Sprintf(format, v)
+	}
+	*e = numFmtEntry{id: id, kind: kind, bits: bits, format: format, str: s}
+	return s
 }
 
 // Slider draws a horizontal slider over [lo, hi] bound to value, which may be
@@ -626,10 +707,7 @@ func (c *Context) SliderEx[T Number](value *T, low, high, step T, format string,
 	thumb := Rect{X: base.X + x, Y: base.Y, W: w, H: base.H}
 	c.DrawControlFrame(id, thumb, ColorButton, opt)
 	// draw text
-	if format == "" {
-		format = defaultFormat[T]()
-	}
-	c.DrawControlText(fmt.Sprintf(format, nv), base, ColorText, opt)
+	c.DrawControlText(formatNumber(c, id, nv, format), base, ColorText, opt)
 	return res
 }
 
@@ -669,10 +747,7 @@ func (c *Context) NumberEx[T Number](value *T, step T, format string, opt Option
 	}
 
 	c.DrawControlFrame(id, base, ColorBase, opt)
-	if format == "" {
-		format = defaultFormat[T]()
-	}
-	c.DrawControlText(fmt.Sprintf(format, *value), base, ColorText, opt)
+	c.DrawControlText(formatNumber(c, id, *value, format), base, ColorText, opt)
 	return res
 }
 
@@ -683,7 +758,7 @@ func (c *Context) NumberEx[T Number](value *T, step T, format string, opt Option
 func (c *Context) header(label string, istreenode bool, opt Option) Result {
 	id := c.getIDString(label)
 	idx := poolGet(c.treenodePool[:], id)
-	c.layoutRow(1, []int{-1}, max(c.Style.HeaderHeight, 0))
+	c.layoutRowSingle(-1, max(c.Style.HeaderHeight, 0))
 
 	active := idx >= 0
 	expanded := active

@@ -38,6 +38,19 @@ type textEdit struct {
 	lastClickX int
 }
 
+// numFmtEntry caches one formatted Slider/Number label across frames so
+// unchanged numeric controls don't re-format or allocate every frame.
+// kind == 0 marks an unused slot.
+type numFmtEntry struct {
+	id     ID
+	kind   uint8
+	bits   uint64
+	format string
+	str    string
+}
+
+const numFmtCacheSize = 32
+
 // poolItem is a slot in a retained-state pool, keyed by id and aged by the
 // frame it was last touched.
 type poolItem struct {
@@ -92,6 +105,7 @@ type Context struct {
 	containerPool [containerPoolSize]poolItem
 	containers    [containerPoolSize]Container
 	treenodePool  [treenodePoolSize]poolItem
+	numFmtCache   [numFmtCacheSize]numFmtEntry
 
 	// input state
 	mousePos     Vec2

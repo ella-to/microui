@@ -29,7 +29,7 @@ func (c *Context) pushLayout(body Rect, scroll Vec2) {
 		max:  Vec2{X: -0x1000000, Y: -0x1000000},
 	}
 	c.layoutStack = append(c.layoutStack, l)
-	c.layoutRow(1, []int{0}, 0)
+	c.layoutRowSingle(0, 0)
 }
 
 // getLayout returns a pointer to the current (top) layout.
@@ -59,6 +59,17 @@ func (c *Context) LayoutEndColumn() {
 	a.nextRow = max(a.nextRow, b.nextRow+b.body.Y-a.body.Y)
 	a.max.X = max(a.max.X, b.max.X)
 	a.max.Y = max(a.max.Y, b.max.Y)
+}
+
+// layoutRowSingle configures a single-item row with the given width and height
+// without constructing a slice literal.
+func (c *Context) layoutRowSingle(width, height int) {
+	l := c.getLayout()
+	l.widths[0] = width
+	l.items = 1
+	l.position = Vec2{X: l.indent, Y: l.nextRow}
+	l.size.Y = height
+	l.itemIndex = 0
 }
 
 // layoutRow configures the next row. When widths is non-nil it sets per-item
