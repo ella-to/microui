@@ -129,7 +129,15 @@ func ansi16(c microui.Color) int {
 
 // colorKey reduces c to what mode can actually show, so two colors that
 // quantize to the same palette entry don't cost a redundant SGR sequence.
+// The ColorTrue fast path stays small so callers inline it.
 func colorKey(mode ColorMode, c microui.Color) uint32 {
+	if mode == ColorTrue {
+		return uint32(c.R)<<16 | uint32(c.G)<<8 | uint32(c.B)
+	}
+	return colorKeySlow(mode, c)
+}
+
+func colorKeySlow(mode ColorMode, c microui.Color) uint32 {
 	switch mode {
 	case Color256:
 		return uint32(ansi256(c))
@@ -137,6 +145,19 @@ func colorKey(mode ColorMode, c microui.Color) uint32 {
 		return uint32(ansi16(c))
 	}
 	return uint32(c.R)<<16 | uint32(c.G)<<8 | uint32(c.B)
+}
+
+// appendUint8 appends v in base 10 without strconv call overhead.
+func appendUint8(buf []byte, v uint8) []byte {
+	if v >= 100 {
+		buf = append(buf, '0'+v/100)
+		v %= 100
+		return append(buf, '0'+v/10, '0'+v%10)
+	}
+	if v >= 10 {
+		return append(buf, '0'+v/10, '0'+v%10)
+	}
+	return append(buf, '0'+v)
 }
 
 // encoder accumulates one frame of output.
@@ -159,7 +180,13 @@ func (e *encoder) reset() {
 
 func (e *encoder) str(s string) { e.buf = append(e.buf, s...) }
 
-func (e *encoder) num(n int) { e.buf = strconv.AppendInt(e.buf, int64(n), 10) }
+func (e *encoder) num(n int) {
+	if uint(n) <= 255 {
+		e.buf = appendUint8(e.buf, uint8(n))
+		return
+	}
+	e.buf = strconv.AppendInt(e.buf, int64(n), 10)
+}
 
 // moveTo positions the cursor at (x, y) unless it is already there.
 func (e *encoder) moveTo(x, y int) {
@@ -174,12 +201,12 @@ func (e *encoder) moveTo(x, y int) {
 	e.cx, e.cy = x, y
 }
 
-// colorParams appends the SGR parameters selecting color c as the
+// colorParams appends the SGR parameters selecting colorKey key as the
 // foreground (or background when bg is set).
-func (e *encoder) colorParams(c microui.Color, bg bool) {
+func (e *encoder) colorParams(key uint32, bg bool) {
 	switch e.mode {
 	case Color16:
-		i := ansi16(c)
+		i := int(key)
 		base := 30
 		if i >= 8 {
 			base, i = 90, i-8
@@ -187,25 +214,25 @@ func (e *encoder) colorParams(c microui.Color, bg bool) {
 		if bg {
 			base += 10
 		}
-		e.num(base + i)
+		e.buf = appendUint8(e.buf, uint8(base+i))
 	case Color256:
 		if bg {
 			e.str("48;5;")
 		} else {
 			e.str("38;5;")
 		}
-		e.num(ansi256(c))
+		e.buf = appendUint8(e.buf, uint8(key))
 	default:
 		if bg {
 			e.str("48;2;")
 		} else {
 			e.str("38;2;")
 		}
-		e.num(int(c.R))
+		e.buf = appendUint8(e.buf, uint8(key>>16))
 		e.buf = append(e.buf, ';')
-		e.num(int(c.G))
+		e.buf = appendUint8(e.buf, uint8(key>>8))
 		e.buf = append(e.buf, ';')
-		e.num(int(c.B))
+		e.buf = appendUint8(e.buf, uint8(key))
 	}
 }
 
@@ -225,14 +252,14 @@ func (e *encoder) setPen(c cell) {
 	}
 	e.str("\x1b[")
 	if needFG {
-		e.colorParams(c.fg, false)
+		e.colorParams(fgKey, false)
 		e.fg = fgKey
 	}
 	if needBG {
 		if needFG {
 			e.buf = append(e.buf, ';')
 		}
-		e.colorParams(c.bg, true)
+		e.colorParams(bgKey, true)
 		e.bg = bgKey
 	}
 	e.buf = append(e.buf, 'm')
@@ -249,7 +276,11 @@ func (e *encoder) setPen(c cell) {
 func (e *encoder) put(x, y int, c cell, w, screenW int) {
 	e.moveTo(x, y)
 	e.setPen(c)
-	e.buf = utf8.AppendRune(e.buf, c.ch)
+	if c.ch < utf8.RuneSelf {
+		e.buf = append(e.buf, byte(c.ch))
+	} else {
+		e.buf = utf8.AppendRune(e.buf, c.ch)
+	}
 	e.cx += w
 	if e.cx >= screenW {
 		e.cx = -1 // pending-wrap state differs between terminals: re-position
@@ -260,8 +291,49 @@ func (e *encoder) put(x, y int, c cell, w, screenW int) {
 // into back (both normalized, same size). With full set every cell is written.
 // It reports whether anything was emitted.
 func (e *encoder) encodeDiff(front, back *screen, full bool) bool {
+	if !full && bytes.Equal(cellBytes(back.cells), cellBytes(front.cells)) {
+		return false // idle frame: whole screen matches in one memequal
+	}
 	start := len(e.buf)
 	w := back.w
+	if !front.hasWide && !back.hasWide {
+		// Fast path: neither buffer contains wide runes or continuation cells,
+		// so every cell spans exactly one column.
+		if full {
+			for y := range back.h {
+				brow := back.cells[y*w : (y+1)*w]
+				for x, c := range brow {
+					e.put(x, y, c, 1, w)
+				}
+			}
+			return len(e.buf) > start
+		}
+		const chunk = 16
+		for y := range back.h {
+			brow := back.cells[y*w : (y+1)*w]
+			frow := front.cells[y*w : (y+1)*w]
+			if bytes.Equal(cellBytes(brow), cellBytes(frow)) {
+				continue
+			}
+			for x := 0; x < w; x += chunk {
+				end := min(x+chunk, w)
+				bc := brow[x:end]
+				fc := frow[x:end]
+				if bytes.Equal(cellBytes(bc), cellBytes(fc)) {
+					continue
+				}
+				_ = fc[len(bc)-1]
+				for i, c := range bc {
+					if c != fc[i] {
+						col := x + i
+						e.fillGapNarrow(brow, col, y)
+						e.put(col, y, c, 1, w)
+					}
+				}
+			}
+		}
+		return len(e.buf) > start
+	}
 	for y := range back.h {
 		brow := back.cells[y*w : (y+1)*w]
 		frow := front.cells[y*w : (y+1)*w]
@@ -301,6 +373,28 @@ func (e *encoder) encodeDiff(front, back *screen, full bool) bool {
 // over them: a cursor move costs ~6 bytes, a plain cell one.
 const maxGap = 4
 
+// fillGapNarrow is fillGap for rows known to contain only single-column cells.
+func (e *encoder) fillGapNarrow(row []cell, x, y int) {
+	if e.cy != y || e.cx < 0 || x <= e.cx || x-e.cx > maxGap || !e.penOK {
+		return
+	}
+	gap := row[e.cx:x]
+	for _, c := range gap {
+		if colorKey(e.mode, c.bg) != e.bg ||
+			(c.ch != ' ' && colorKey(e.mode, c.fg) != e.fg) {
+			return
+		}
+	}
+	for _, c := range gap {
+		if c.ch < utf8.RuneSelf {
+			e.buf = append(e.buf, byte(c.ch))
+		} else {
+			e.buf = utf8.AppendRune(e.buf, c.ch)
+		}
+	}
+	e.cx = x
+}
+
 // fillGap rewrites the few unchanged cells between the cursor and column x
 // when that is cheaper than a cursor move, i.e. when they are narrow and
 // already match the current pen.
@@ -316,7 +410,11 @@ func (e *encoder) fillGap(row []cell, x, y int) {
 		}
 	}
 	for _, c := range gap {
-		e.buf = utf8.AppendRune(e.buf, c.ch)
+		if c.ch < utf8.RuneSelf {
+			e.buf = append(e.buf, byte(c.ch))
+		} else {
+			e.buf = utf8.AppendRune(e.buf, c.ch)
+		}
 	}
 	e.cx = x
 }

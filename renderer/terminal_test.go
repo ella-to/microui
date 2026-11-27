@@ -240,6 +240,18 @@ func TestWideTextOccupiesTwoCells(t *testing.T) {
 	if got := term.Text(); got != "a Xb      \n" {
 		t.Fatalf("half-overwritten wide glyph: Text() = %q", got)
 	}
+	// replacing a wide glyph frame with a narrow frame must repaint the freed
+	// second column cleanly
+	term.Clear(microui.RGBA(0, 0, 0, 255))
+	term.DrawText(nil, "a日b", microui.Vec2{X: 0, Y: 0}, microui.RGBA(255, 255, 255, 255))
+	term.Present()
+	term.Clear(microui.RGBA(0, 0, 0, 255))
+	term.DrawText(nil, "aXYb", microui.Vec2{X: 0, Y: 0}, microui.RGBA(255, 255, 255, 255))
+	out.Reset()
+	term.Present()
+	if !strings.Contains(out.String(), "XY") {
+		t.Fatalf("wide-to-narrow transition did not emit replacement cells: %q", out.String())
+	}
 }
 
 func TestWideTextClippedAtEdge(t *testing.T) {
