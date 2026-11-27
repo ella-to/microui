@@ -181,3 +181,16 @@ func TestParseControlActions(t *testing.T) {
 		t.Fatalf("Ctrl-Z: %+v", res)
 	}
 }
+
+func TestParseMouseZeroAllocs(t *testing.T) {
+	var p inputParser
+	ctx := microui.New()
+	now := time.Now()
+	in := []byte("\x1b[<35;42;18M")
+	allocs := testing.AllocsPerRun(100, func() {
+		p.parse(ctx, in, now)
+	})
+	if allocs != 0 {
+		t.Fatalf("mouse motion parse allocated %.1f times/op, want 0", allocs)
+	}
+}

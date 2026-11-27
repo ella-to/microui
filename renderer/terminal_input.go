@@ -176,7 +176,7 @@ func (p *inputParser) next(buf []byte, now time.Time) token {
 		if p.escSince.IsZero() {
 			p.escSince = now
 		}
-		if now.Sub(p.escSince) >= escTimeout && !bytes.HasPrefix(buf, []byte(pasteStart)) {
+		if now.Sub(p.escSince) >= escTimeout && !bytes.HasPrefix(buf, pasteStartBytes) {
 			p.escSince = time.Time{}
 			return token{n: 1, kind: evKey, key: microui.KeyEscape}
 		}
@@ -224,6 +224,12 @@ const (
 	pasteEnd   = "\x1b[201~"
 )
 
+var (
+	pasteStartBytes = []byte(pasteStart)
+	pasteEndBytes   = []byte(pasteEnd)
+	semicolonBytes  = []byte{';'}
+)
+
 // escape decodes an escape sequence at the start of buf. n == 0 means it is
 // incomplete.
 func (p *inputParser) escape(buf []byte) token {
@@ -250,7 +256,7 @@ func (p *inputParser) escape(buf []byte) token {
 
 // csi decodes "ESC [ params final".
 func (p *inputParser) csi(buf []byte) token {
-	if bytes.HasPrefix(buf, []byte(pasteStart)) {
+	if bytes.HasPrefix(buf, pasteStartBytes) {
 		return paste(buf)
 	}
 	k := 2
@@ -263,34 +269,36 @@ func (p *inputParser) csi(buf []byte) token {
 	if k >= len(buf) {
 		return token{}
 	}
-	params, final := string(buf[2:k]), buf[k]
+	params, final := buf[2:k], buf[k]
 	n := k + 1
 
-	if strings.HasPrefix(params, "<") && (final == 'M' || final == 'm') {
+	if len(params) > 0 && params[0] == '<' && (final == 'M' || final == 'm') {
 		tok := mouse(params[1:], final == 'M')
 		tok.n = n
 		return tok
 	}
 
 	// split "a;b" into the key number and the xterm modifier parameter
-	first, mod, _ := strings.Cut(params, ";")
+	first, mod, _ := bytes.Cut(params, semicolonBytes)
 	mods := xtermMods(mod)
 	key := finalKey(final)
 	switch final {
 	case 'Z': // Shift-Tab
 		key, mods = microui.KeyTab, mods|microui.KeyShift
 	case '~': // legacy "CSI n ~" keys
-		switch first {
-		case "1", "7":
-			key = microui.KeyHome
-		case "3":
-			key = microui.KeyDelete
-		case "4", "8":
-			key = microui.KeyEnd
-		case "5":
-			key = microui.KeyPageUp
-		case "6":
-			key = microui.KeyPageDown
+		if len(first) == 1 {
+			switch first[0] {
+			case '1', '7':
+				key = microui.KeyHome
+			case '3':
+				key = microui.KeyDelete
+			case '4', '8':
+				key = microui.KeyEnd
+			case '5':
+				key = microui.KeyPageUp
+			case '6':
+				key = microui.KeyPageDown
+			}
 		}
 	case 'u': // CSI u ("fixterms"/kitty) encoding of otherwise ambiguous keys
 		return csiU(first, mods, n)
@@ -321,7 +329,7 @@ func finalKey(b byte) microui.Key {
 }
 
 // xtermMods decodes an xterm modifier parameter (bitmask plus one).
-func xtermMods(s string) microui.Key {
+func xtermMods(s []byte) microui.Key {
 	m, ok := atoi(s)
 	if !ok || m < 1 {
 		return 0
@@ -341,7 +349,7 @@ func xtermMods(s string) microui.Key {
 }
 
 // csiU decodes "CSI codepoint ; mods u".
-func csiU(code string, mods microui.Key, n int) token {
+func csiU(code []byte, mods microui.Key, n int) token {
 	cp, ok := atoi(code)
 	if !ok {
 		return token{n: n}
@@ -374,7 +382,7 @@ func csiU(code string, mods microui.Key, n int) token {
 // characters are dropped.
 func paste(buf []byte) token {
 	body := buf[len(pasteStart):]
-	end := bytes.Index(body, []byte(pasteEnd))
+	end := bytes.Index(body, pasteEndBytes)
 	n := len(pasteStart) + end + len(pasteEnd)
 	if end < 0 {
 		if len(buf) < maxPaste {
@@ -398,9 +406,9 @@ func paste(buf []byte) token {
 }
 
 // mouse decodes an SGR mouse report "cb;cx;cy".
-func mouse(params string, press bool) token {
-	a, rest, _ := strings.Cut(params, ";")
-	b, c, _ := strings.Cut(rest, ";")
+func mouse(params []byte, press bool) token {
+	a, rest, _ := bytes.Cut(params, semicolonBytes)
+	b, c, _ := bytes.Cut(rest, semicolonBytes)
 	cb, ok1 := atoi(a)
 	cx, ok2 := atoi(b)
 	cy, ok3 := atoi(c)
@@ -450,16 +458,16 @@ func mouse(params string, press bool) token {
 }
 
 // atoi parses a small non-negative decimal without allocating.
-func atoi(s string) (int, bool) {
-	if s == "" || len(s) > 9 {
+func atoi(s []byte) (int, bool) {
+	if len(s) == 0 || len(s) > 9 {
 		return 0, false
 	}
 	n := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
+	for _, b := range s {
+		if b < '0' || b > '9' {
 			return 0, false
 		}
-		n = n*10 + int(s[i]-'0')
+		n = n*10 + int(b-'0')
 	}
 	return n, true
 }

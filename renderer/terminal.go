@@ -309,6 +309,9 @@ func (t *Terminal) Poll(ctx *microui.Context) bool {
 		}
 	}
 
+	if len(t.pending) == 0 {
+		return false
+	}
 	res := t.parser.parse(ctx, t.pending, time.Now())
 	t.pending = append(t.pending[:0], t.pending[res.n:]...)
 	t.heldMods = res.heldMods
