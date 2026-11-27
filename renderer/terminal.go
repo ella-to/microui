@@ -182,18 +182,18 @@ func (t *Terminal) SetClip(rect microui.Rect) {
 // FillRect paints rect with color as the cell background, alpha-blending
 // translucent colors over what is already there.
 func (t *Terminal) FillRect(rect microui.Rect, color microui.Color) {
-	t.back.fillRect(rect, t.clip, color)
+	t.back.fillRectClipped(rect, t.clip, color)
 }
 
 // DrawText writes str starting at pos on top of whatever background is
 // already there. Wide runes take two cells.
 func (t *Terminal) DrawText(_ microui.Font, str string, pos microui.Vec2, color microui.Color) {
-	t.back.drawText(str, pos, t.clip, color)
+	t.back.drawTextClipped(str, pos, t.clip, color)
 }
 
 // DrawIcon draws a single glyph centered within rect.
 func (t *Terminal) DrawIcon(id microui.Icon, rect microui.Rect, color microui.Color) {
-	t.back.drawIcon(id, rect, t.clip, color)
+	t.back.drawIconClipped(id, rect, t.clip, color)
 }
 
 // Text returns the current surface as plain text, one line per row. It is

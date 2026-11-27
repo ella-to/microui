@@ -21,13 +21,14 @@ type cell struct {
 
 // screen is a w*h grid of cells.
 type screen struct {
-	w, h  int
-	cells []cell
+	w, h    int
+	cells   []cell
+	hasWide bool // true if any cell may hold ch == 0 or a width-2 rune
 }
 
 func newScreen(w, h int) *screen {
 	w, h = max(w, 1), max(h, 1)
-	return &screen{w: w, h: h, cells: make([]cell, w*h)}
+	return &screen{w: w, h: h, cells: make([]cell, w*h), hasWide: true}
 }
 
 // resize changes the surface size, discarding its contents.
@@ -43,6 +44,7 @@ func (s *screen) resize(w, h int) {
 	} else {
 		s.cells = make([]cell, w*h)
 	}
+	s.hasWide = true
 }
 
 func (s *screen) at(x, y int) *cell { return &s.cells[y*s.w+x] }
@@ -51,90 +53,207 @@ func (s *screen) bounds() microui.Rect { return microui.Rect{W: s.w, H: s.h} }
 
 // clear fills every cell with a blank of color bg.
 func (s *screen) clear(bg microui.Color) {
+	s.hasWide = false
 	if len(s.cells) == 0 {
 		return
 	}
-	s.cells[0] = cell{ch: ' ', fg: bg, bg: bg}
-	for n := 1; n < len(s.cells); n *= 2 {
-		copy(s.cells[n:], s.cells[:n]) // doubling copy: memmove instead of a loop
+	fill := cell{ch: ' ', fg: bg, bg: bg}
+	// Fill a small L1-resident seed block and copy it across the buffer so
+	// subsequent copies always read from L1d instead of streaming the entire
+	// screen through L2.
+	seedLen := min(len(s.cells), 256)
+	seed := s.cells[:seedLen]
+	initLen := min(seedLen, 8)
+	for i := range initLen {
+		seed[i] = fill
+	}
+	for n := initLen; n < seedLen; n *= 2 {
+		copy(seed[n:], seed[:n])
+	}
+	for off := seedLen; off < len(s.cells); off += seedLen {
+		copy(s.cells[off:], seed)
 	}
 }
 
 // blend composites src over dst using src's alpha. The result is opaque.
 func blend(dst, src microui.Color) microui.Color {
-	switch src.A {
-	case 255:
+	if src.A == 255 {
 		return src
-	case 0:
+	}
+	if src.A == 0 {
 		return dst
 	}
 	a := uint32(src.A)
-	mix := func(d, s uint8) uint8 { return uint8((uint32(s)*a + uint32(d)*(255-a) + 127) / 255) }
-	return microui.Color{R: mix(dst.R, src.R), G: mix(dst.G, src.G), B: mix(dst.B, src.B), A: 255}
+	inv := 255 - a
+	return microui.Color{
+		R: uint8((uint32(src.R)*a + uint32(dst.R)*inv + 127) / 255),
+		G: uint8((uint32(src.G)*a + uint32(dst.G)*inv + 127) / 255),
+		B: uint8((uint32(src.B)*a + uint32(dst.B)*inv + 127) / 255),
+		A: 255,
+	}
 }
 
-// fillRect paints rect (clipped to clip and the screen). An opaque color
-// replaces the cells; a translucent one tints both their background and
-// their glyphs, so overlays such as a modal backdrop dim what is beneath.
-func (s *screen) fillRect(rect, clip microui.Rect, color microui.Color) {
-	r := rect.Intersect(clip).Intersect(s.bounds())
+// fillRectClipped paints rect clipped to clip (which must lie within s.bounds()).
+// An opaque color replaces the cells; a translucent one tints both their
+// background and their glyphs, so overlays such as a modal backdrop dim what is
+// beneath.
+func (s *screen) fillRectClipped(rect, clip microui.Rect, color microui.Color) {
+	if color.A == 0 {
+		return
+	}
+	r := rect.Intersect(clip)
 	if r.Empty() {
 		return // an empty intersection may still carry an off-screen X
 	}
-	opaque := color.A == 255
+	if color.A == 255 {
+		fill := cell{ch: ' ', fg: color, bg: color}
+		if r.W == 1 {
+			idx := r.Y*s.w + r.X
+			for range r.H {
+				s.cells[idx] = fill
+				idx += s.w
+			}
+			return
+		}
+		if r.W == s.w {
+			dst := s.cells[r.Y*s.w : (r.Y+r.H)*s.w]
+			seedLen := min(len(dst), 256)
+			seed := dst[:seedLen]
+			initLen := min(seedLen, 8)
+			for i := range initLen {
+				seed[i] = fill
+			}
+			for n := initLen; n < seedLen; n *= 2 {
+				copy(seed[n:], seed[:n])
+			}
+			for off := seedLen; off < len(dst); off += seedLen {
+				copy(dst[off:], seed)
+			}
+			return
+		}
+		off := r.Y*s.w + r.X
+		row0 := s.cells[off : off+r.W]
+		if r.W <= 16 {
+			for i := range row0 {
+				row0[i] = fill
+			}
+		} else {
+			for i := range 8 {
+				row0[i] = fill
+			}
+			for n := 8; n < len(row0); n *= 2 {
+				copy(row0[n:], row0[:n])
+			}
+		}
+		for y := 1; y < r.H; y++ {
+			off += s.w
+			copy(s.cells[off:off+r.W], row0)
+		}
+		return
+	}
+
+	a := uint32(color.A)
+	inv := 255 - a
+	sr := uint32(color.R)*a + 127
+	sg := uint32(color.G)*a + 127
+	sb := uint32(color.B)*a + 127
 	for y := r.Y; y < r.Y+r.H; y++ {
 		row := s.cells[y*s.w+r.X : y*s.w+r.X+r.W]
 		for i := range row {
 			c := &row[i]
-			if opaque {
-				*c = cell{ch: ' ', fg: color, bg: color}
-				continue
+			c.bg = microui.Color{
+				R: uint8((sr + uint32(c.bg.R)*inv) / 255),
+				G: uint8((sg + uint32(c.bg.G)*inv) / 255),
+				B: uint8((sb + uint32(c.bg.B)*inv) / 255),
+				A: 255,
 			}
-			c.bg = blend(c.bg, color)
-			c.fg = blend(c.fg, color)
+			c.fg = microui.Color{
+				R: uint8((sr + uint32(c.fg.R)*inv) / 255),
+				G: uint8((sg + uint32(c.fg.G)*inv) / 255),
+				B: uint8((sb + uint32(c.fg.B)*inv) / 255),
+				A: 255,
+			}
 		}
 	}
 }
 
-// drawText writes str starting at pos, keeping each cell's background so text
-// sits on top of frames. Wide runes take two cells; zero-width runes
-// (combining marks, joiners, control characters) are skipped.
-func (s *screen) drawText(str string, pos microui.Vec2, clip microui.Rect, color microui.Color) {
-	clip = clip.Intersect(s.bounds())
+// drawTextClipped writes str starting at pos within clip (which must lie
+// within s.bounds()), keeping each cell's background so text sits on top of
+// frames. Wide runes take two cells; zero-width runes (combining marks,
+// joiners, control characters) are skipped.
+func (s *screen) drawTextClipped(str string, pos microui.Vec2, clip microui.Rect, color microui.Color) {
 	y := pos.Y
-	if y < clip.Y || y >= clip.Y+clip.H {
+	if y < clip.Y || y >= clip.Y+clip.H || len(str) == 0 {
 		return
 	}
+	clipRight := clip.X + clip.W
 	x := pos.X
-	for _, r := range str {
-		w := runeWidth(r)
-		if w == 0 {
-			continue
-		}
-		if x >= clip.X+clip.W {
+	if x >= clipRight {
+		return
+	}
+	row := s.cells[y*s.w : (y+1)*s.w]
+	opaque := color.A == 255
+	for i := 0; i < len(str); i++ {
+		b := str[i]
+		if b >= 0x80 {
+			for _, r := range str[i:] {
+				w := runeWidth(r)
+				if w == 0 {
+					continue
+				}
+				if x >= clipRight {
+					return
+				}
+				if x >= clip.X && x+w <= clipRight {
+					c := &row[x]
+					c.ch = r
+					if opaque {
+						c.fg = color
+					} else {
+						c.fg = blend(c.bg, color)
+					}
+					if w == 2 {
+						s.hasWide = true
+						next := &row[x+1]
+						next.ch = 0
+						next.bg = c.bg
+					}
+				}
+				x += w
+			}
 			return
 		}
-		if x >= clip.X && x+w <= clip.X+clip.W {
-			c := s.at(x, y)
-			c.ch = r
-			c.fg = blend(c.bg, color)
-			if w == 2 {
-				next := s.at(x+1, y)
-				next.ch = 0
-				next.bg = c.bg
+		if b < 0x20 || b == 0x7f {
+			continue
+		}
+		if x >= clipRight {
+			return
+		}
+		if x >= clip.X {
+			c := &row[x]
+			c.ch = rune(b)
+			if opaque {
+				c.fg = color
+			} else {
+				c.fg = blend(c.bg, color)
 			}
 		}
-		x += w
+		x++
 	}
 }
 
-// drawIcon draws a single glyph centered within rect.
-func (s *screen) drawIcon(id microui.Icon, rect, clip microui.Rect, color microui.Color) {
+// drawIconClipped draws a single glyph centered within rect, clipped to clip
+// (which must lie within s.bounds()).
+func (s *screen) drawIconClipped(id microui.Icon, rect, clip microui.Rect, color microui.Color) {
 	p := microui.Vec2{X: rect.X + (rect.W-1)/2, Y: rect.Y + (rect.H-1)/2}
-	if clip.Intersect(s.bounds()).Contains(p) {
+	if clip.Contains(p) {
 		c := s.at(p.X, p.Y)
 		c.ch = iconGlyph(id)
-		c.fg = blend(c.bg, color)
+		if color.A == 255 {
+			c.fg = color
+		} else {
+			c.fg = blend(c.bg, color)
+		}
 	}
 }
 
@@ -143,6 +262,9 @@ func (s *screen) drawIcon(id microui.Icon, rect, clip microui.Rect, color microu
 // blank. Afterwards every lead is followed by exactly one continuation, which
 // is what the ANSI encoder relies on.
 func (s *screen) normalize() {
+	if !s.hasWide {
+		return
+	}
 	for y := range s.h {
 		row := s.cells[y*s.w : (y+1)*s.w]
 		for x := range row {

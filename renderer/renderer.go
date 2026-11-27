@@ -118,6 +118,29 @@ func Connect(ctx *microui.Context, r Renderer) {
 // commands to r, without presenting it. Use it to inspect the surface first,
 // e.g. in tests: Draw into a NewHeadless terminal, then assert on its Text.
 func Draw(r Renderer, ctx *microui.Context, bg microui.Color) {
+	if t, ok := r.(*Terminal); ok {
+		back := t.back
+		back.clear(bg.WithAlpha(255))
+		bounds := back.bounds()
+		clip := bounds
+		for cmd := range ctx.Commands() {
+			switch cmd.Type {
+			case microui.CommandClip:
+				clip = cmd.Rect.Intersect(bounds)
+			case microui.CommandRect:
+				if cmd.Color.A == 0 {
+					continue
+				}
+				back.fillRectClipped(cmd.Rect, clip, cmd.Color)
+			case microui.CommandText:
+				back.drawTextClipped(cmd.Str, cmd.Pos, clip, cmd.Color)
+			case microui.CommandIcon:
+				back.drawIconClipped(cmd.Icon, cmd.Rect, clip, cmd.Color)
+			}
+		}
+		t.clip = clip
+		return
+	}
 	r.Clear(bg)
 	for cmd := range ctx.Commands() {
 		switch cmd.Type {
