@@ -34,14 +34,13 @@ const (
 // a slice index instead of a pointer.
 type Command struct {
 	Type  CommandType
-	Rect  Rect   // Clip, Rect, Icon
-	Color Color  // Rect, Text, Icon
-	Pos   Vec2   // Text
+	Rect  Rect  // Clip, Rect, Icon
+	Color Color // Rect, Text, Icon
+	jump  int32 // CommandJump: destination index into commandList (packs into Color's padding)
+	Pos   Vec2  // Text
 	Str   string // Text
 	Font  Font   // Text
 	Icon  Icon   // Icon
-
-	jump int // CommandJump: destination index into commandList
 }
 
 // pushCommand appends a command and returns its index in the command list.
@@ -53,7 +52,7 @@ func (c *Context) pushCommand(cmd Command) int {
 // pushJump appends a jump command targeting dst (a command index, or -1 if not
 // yet known) and returns its index.
 func (c *Context) pushJump(dst int) int {
-	return c.pushCommand(Command{Type: CommandJump, jump: dst})
+	return c.pushCommand(Command{Type: CommandJump, jump: int32(dst)})
 }
 
 // Commands returns an iterator over the frame's draw commands in back-to-front
@@ -61,14 +60,14 @@ func (c *Context) pushJump(dst int) int {
 // callers see only Clip/Rect/Text/Icon commands. It must be called after End.
 func (c *Context) Commands() iter.Seq[Command] {
 	return func(yield func(Command) bool) {
-		i := 0
-		for i < len(c.commandList) {
-			cmd := c.commandList[i]
-			if cmd.Type == CommandJump {
-				i = cmd.jump
+		cmds := c.commandList
+		for i := 0; i < len(cmds); {
+			p := &cmds[i]
+			if p.Type == CommandJump {
+				i = int(p.jump)
 				continue
 			}
-			if !yield(cmd) {
+			if !yield(*p) {
 				return
 			}
 			i++
@@ -101,10 +100,9 @@ func (c *Context) GetClipRect() Rect {
 	return c.clipStack[len(c.clipStack)-1]
 }
 
-// checkClip reports how r relates to the current clip rectangle: clipNone if r
-// is fully visible, clipAll if fully clipped, or clipPart if partially clipped.
-func (c *Context) checkClip(r Rect) int {
-	cr := c.GetClipRect()
+// checkClipRect reports how r relates to cr: clipNone if r is fully visible,
+// clipAll if fully clipped, or clipPart if partially clipped.
+func checkClipRect(r, cr Rect) int {
 	if r.X > cr.X+cr.W || r.X+r.W < cr.X ||
 		r.Y > cr.Y+cr.H || r.Y+r.H < cr.Y {
 		return clipAll
@@ -114,6 +112,12 @@ func (c *Context) checkClip(r Rect) int {
 		return clipNone
 	}
 	return clipPart
+}
+
+// checkClip reports how r relates to the current clip rectangle: clipNone if r
+// is fully visible, clipAll if fully clipped, or clipPart if partially clipped.
+func (c *Context) checkClip(r Rect) int {
+	return checkClipRect(r, c.GetClipRect())
 }
 
 // ---- draw primitives --------------------------------------------------------
@@ -133,22 +137,44 @@ func (c *Context) DrawRect(rect Rect, color Color) {
 
 // DrawBox emits the four edges of rect as 1-unit-thick rectangles.
 func (c *Context) DrawBox(rect Rect, color Color) {
-	c.DrawRect(Rect{X: rect.X + 1, Y: rect.Y, W: rect.W - 2, H: 1}, color)
-	c.DrawRect(Rect{X: rect.X + 1, Y: rect.Y + rect.H - 1, W: rect.W - 2, H: 1}, color)
-	c.DrawRect(Rect{X: rect.X, Y: rect.Y, W: 1, H: rect.H}, color)
-	c.DrawRect(Rect{X: rect.X + rect.W - 1, Y: rect.Y, W: 1, H: rect.H}, color)
+	cr := c.GetClipRect()
+	if rect.X >= cr.X && rect.X+rect.W <= cr.X+cr.W &&
+		rect.Y >= cr.Y && rect.Y+rect.H <= cr.Y+cr.H &&
+		rect.W > 2 && rect.H > 0 {
+		c.commandList = append(c.commandList,
+			Command{Type: CommandRect, Rect: Rect{X: rect.X + 1, Y: rect.Y, W: rect.W - 2, H: 1}, Color: color},
+			Command{Type: CommandRect, Rect: Rect{X: rect.X + 1, Y: rect.Y + rect.H - 1, W: rect.W - 2, H: 1}, Color: color},
+			Command{Type: CommandRect, Rect: Rect{X: rect.X, Y: rect.Y, W: 1, H: rect.H}, Color: color},
+			Command{Type: CommandRect, Rect: Rect{X: rect.X + rect.W - 1, Y: rect.Y, W: 1, H: rect.H}, Color: color},
+		)
+		return
+	}
+	if rect.Intersect(cr).Empty() {
+		return
+	}
+	if r := (Rect{X: rect.X + 1, Y: rect.Y, W: rect.W - 2, H: 1}).Intersect(cr); !r.Empty() {
+		c.pushCommand(Command{Type: CommandRect, Rect: r, Color: color})
+	}
+	if r := (Rect{X: rect.X + 1, Y: rect.Y + rect.H - 1, W: rect.W - 2, H: 1}).Intersect(cr); !r.Empty() {
+		c.pushCommand(Command{Type: CommandRect, Rect: r, Color: color})
+	}
+	if r := (Rect{X: rect.X, Y: rect.Y, W: 1, H: rect.H}).Intersect(cr); !r.Empty() {
+		c.pushCommand(Command{Type: CommandRect, Rect: r, Color: color})
+	}
+	if r := (Rect{X: rect.X + rect.W - 1, Y: rect.Y, W: 1, H: rect.H}).Intersect(cr); !r.Empty() {
+		c.pushCommand(Command{Type: CommandRect, Rect: r, Color: color})
+	}
 }
 
-// DrawText emits a text command for str at pos, automatically inserting clip
-// commands when the text is partially clipped.
-func (c *Context) DrawText(font Font, str string, pos Vec2, color Color) {
-	rect := Rect{X: pos.X, Y: pos.Y, W: c.TextWidth(font, str), H: c.TextHeight(font)}
-	clipped := c.checkClip(rect)
+// drawTextClipped emits a text command for str with precomputed dimensions
+// (tw, th), clipped against cr.
+func (c *Context) drawTextClipped(font Font, str string, pos Vec2, tw, th int, color Color, cr Rect) {
+	clipped := checkClipRect(Rect{X: pos.X, Y: pos.Y, W: tw, H: th}, cr)
 	if clipped == clipAll {
 		return
 	}
 	if clipped == clipPart {
-		c.SetClip(c.GetClipRect())
+		c.SetClip(cr)
 	}
 	c.pushCommand(Command{Type: CommandText, Str: str, Pos: pos, Color: color, Font: font})
 	if clipped != clipNone {
@@ -156,15 +182,27 @@ func (c *Context) DrawText(font Font, str string, pos Vec2, color Color) {
 	}
 }
 
+// DrawText emits a text command for str at pos, automatically inserting clip
+// commands when the text is partially clipped.
+func (c *Context) DrawText(font Font, str string, pos Vec2, color Color) {
+	cr := c.GetClipRect()
+	th := c.TextHeight(font)
+	if pos.Y > cr.Y+cr.H || pos.Y+th < cr.Y || pos.X > cr.X+cr.W {
+		return
+	}
+	c.drawTextClipped(font, str, pos, c.TextWidth(font, str), th, color, cr)
+}
+
 // DrawIcon emits an icon command, automatically inserting clip commands when
 // the icon rect is partially clipped.
 func (c *Context) DrawIcon(id Icon, rect Rect, color Color) {
-	clipped := c.checkClip(rect)
+	cr := c.GetClipRect()
+	clipped := checkClipRect(rect, cr)
 	if clipped == clipAll {
 		return
 	}
 	if clipped == clipPart {
-		c.SetClip(c.GetClipRect())
+		c.SetClip(cr)
 	}
 	c.pushCommand(Command{Type: CommandIcon, Icon: id, Rect: rect, Color: color})
 	if clipped != clipNone {

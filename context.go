@@ -1,9 +1,7 @@
 package microui
 
 import (
-	"cmp"
 	"reflect"
-	"slices"
 	"time"
 	"unsafe"
 )
@@ -182,23 +180,28 @@ func (c *Context) End() {
 	c.scrollDelta = Vec2{}
 	c.lastMousePos = c.mousePos
 
-	// sort root containers by zindex
-	slices.SortStableFunc(c.rootList, func(a, b *Container) int {
-		return cmp.Compare(a.ZIndex, b.ZIndex)
-	})
+	// sort root containers by zindex (insertion sort is stable and O(n) when
+	// already sorted, the common case since windows are submitted in the same
+	// order each frame)
+	for i := 1; i < len(c.rootList); i++ {
+		cnt := c.rootList[i]
+		j := i - 1
+		for j >= 0 && c.rootList[j].ZIndex > cnt.ZIndex {
+			c.rootList[j+1] = c.rootList[j]
+			j--
+		}
+		c.rootList[j+1] = cnt
+	}
 
 	// set root container jump commands: the first command jumps to the
 	// back-most container, each container's tail jumps to the next one, and
 	// the front-most container's tail jumps to the end of the list.
-	for i, cnt := range c.rootList {
-		if i == 0 {
-			c.commandList[0].jump = cnt.head + 1
-		} else {
-			c.commandList[c.rootList[i-1].tail].jump = cnt.head + 1
+	if n := len(c.rootList); n > 0 {
+		c.commandList[0].jump = int32(c.rootList[0].head + 1)
+		for i := 1; i < n; i++ {
+			c.commandList[c.rootList[i-1].tail].jump = int32(c.rootList[i].head + 1)
 		}
-		if i == len(c.rootList)-1 {
-			c.commandList[cnt.tail].jump = len(c.commandList)
-		}
+		c.commandList[c.rootList[n-1].tail].jump = int32(len(c.commandList))
 	}
 }
 
@@ -274,15 +277,20 @@ func hashString(h ID, s string) ID {
 
 // hashUint64 folds the 8 little-endian bytes of v into h.
 func hashUint64(h ID, v uint64) ID {
-	for range 8 {
-		h = (h ^ ID(byte(v))) * hashPrime
-		v >>= 8
-	}
+	h = (h ^ ID(byte(v))) * hashPrime
+	h = (h ^ ID(byte(v>>8))) * hashPrime
+	h = (h ^ ID(byte(v>>16))) * hashPrime
+	h = (h ^ ID(byte(v>>24))) * hashPrime
+	h = (h ^ ID(byte(v>>32))) * hashPrime
+	h = (h ^ ID(byte(v>>40))) * hashPrime
+	h = (h ^ ID(byte(v>>48))) * hashPrime
+	h = (h ^ ID(byte(v>>56))) * hashPrime
 	return h
 }
 
 // hashKey hashes any IDKey into h. The common concrete types take a fast
-// path; named types (e.g. `type RowID int`) fall back to reflection.
+// path; named types (e.g. `type RowID int`) fall back to hashKeyReflect so
+// this function stays small enough to inline.
 func hashKey[K IDKey](h ID, key K) ID {
 	switch k := any(key).(type) {
 	case string:
@@ -299,7 +307,23 @@ func hashKey[K IDKey](h ID, key K) ID {
 		return hashUint64(h, uint64(k))
 	case int32:
 		return hashUint64(h, uint64(k))
+	case uint:
+		return hashUint64(h, uint64(k))
+	case int16:
+		return hashUint64(h, uint64(k))
+	case uint16:
+		return hashUint64(h, uint64(k))
+	case int8:
+		return hashUint64(h, uint64(k))
+	case uint8:
+		return hashUint64(h, uint64(k))
+	case uintptr:
+		return hashUint64(h, uint64(k))
 	}
+	return hashKeyReflect(h, key)
+}
+
+func hashKeyReflect(h ID, key any) ID {
 	v := reflect.ValueOf(key)
 	switch v.Kind() {
 	case reflect.String:
@@ -350,10 +374,10 @@ func (c *Context) idFromPtr(p unsafe.Pointer) ID {
 func (c *Context) idFromIcon(icon Icon) ID {
 	h := c.idSeed()
 	v := uint32(icon)
-	for range 4 {
-		h = (h ^ ID(byte(v))) * hashPrime
-		v >>= 8
-	}
+	h = (h ^ ID(byte(v))) * hashPrime
+	h = (h ^ ID(byte(v>>8))) * hashPrime
+	h = (h ^ ID(byte(v>>16))) * hashPrime
+	h = (h ^ ID(byte(v>>24))) * hashPrime
 	c.lastID = h
 	return h
 }

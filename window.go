@@ -122,7 +122,7 @@ func (c *Context) beginRootContainer(cnt *Container) {
 func (c *Context) endRootContainer() {
 	cnt := c.GetCurrentContainer()
 	cnt.tail = c.pushJump(-1)
-	c.commandList[cnt.head].jump = len(c.commandList)
+	c.commandList[cnt.head].jump = int32(len(c.commandList))
 	c.PopClipRect()
 	c.popContainer()
 }
